@@ -50,6 +50,7 @@ Default URLs:
 - API health: http://127.0.0.1:8000/health
 - Demo shipment API: http://127.0.0.1:8000/api/shipments/demo
 - Demo latest location API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/latest-location
+- Demo ETA API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/eta
 - Frontend console: http://127.0.0.1:5173
 
 Ports can be changed with environment variables:
@@ -89,6 +90,11 @@ startup and check commands.
   latest accepted GPS location, update time, transport status, vehicle summary,
   and delay hint. The same development identity headers apply; cargo owners can
   only read their own shipments.
+- `GET /api/shipments/{shipmentId}/eta` returns the transport task ETA,
+  remaining distance, update time, destination, and unavailable reasons when
+  current location or destination data is missing. The current development
+  implementation uses the offline straight-line `EtaService` described in the
+  architecture constraints.
 - `POST /api/device-events` accepts the current development contract for
   device GPS, heartbeat, and box-open/box-close events. Payloads must include
   `eventId`, `eventType`, `deviceId`, `taskId`, `occurredAt`, `reportedAt`, and

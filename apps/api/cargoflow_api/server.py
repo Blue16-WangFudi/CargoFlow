@@ -18,10 +18,12 @@ from cargoflow_api import __version__
 from cargoflow_api.access_control import (
     AccessControlError,
     Principal,
+    Role,
     ShipmentScope,
     parse_principal,
     require_shipment_access,
 )
+from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
 from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
 
@@ -39,6 +41,7 @@ DEMO_SHIPMENT_SCOPE = ShipmentScope(
 )
 SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
 DEVICE_EVENTS = DeviceEventStore.demo()
+ETA_SERVICE = EtaService()
 
 
 def utc_now_iso() -> str:
@@ -71,6 +74,13 @@ def build_demo_shipment() -> dict[str, Any]:
             "eventId": latest_location.event_id,
         }
 
+    eta_payload = SHIPMENT_TRACKING.eta_payload(
+        "CGF-DEMO-001",
+        Principal("owner-acme", Role.CARGO_OWNER, "cgf-demo"),
+        DEVICE_EVENTS,
+        ETA_SERVICE,
+    )["eta"]
+
     return {
         "shipmentId": "CGF-DEMO-001",
         "tenantId": DEMO_SHIPMENT_SCOPE.tenant_id,
@@ -85,11 +95,7 @@ def build_demo_shipment() -> dict[str, Any]:
             "driver": "Demo Driver",
         },
         "latestLocation": latest_location_payload,
-        "eta": {
-            "destination": "Shanghai Waigaoqiao Logistics Park",
-            "estimatedArrival": "2026-05-13T14:30:00+00:00",
-            "remainingDistanceKm": 42.5,
-        },
+        "eta": eta_payload,
         "alerts": [],
     }
 
@@ -105,9 +111,17 @@ def build_authorized_demo_shipment(principal: Principal) -> dict[str, Any]:
 
 
 def latest_location_shipment_id(path: str) -> str | None:
+    return shipment_action_id(path, "latest-location")
+
+
+def eta_shipment_id(path: str) -> str | None:
+    return shipment_action_id(path, "eta")
+
+
+def shipment_action_id(path: str, action: str) -> str | None:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if len(parts) == 4 and parts[:2] == ["api", "shipments"]:
-        if parts[3] == "latest-location":
+        if parts[3] == action:
             return parts[2]
     return None
 
@@ -132,6 +146,10 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         shipment_id = latest_location_shipment_id(path)
         if shipment_id is not None:
             self.send_latest_shipment_location(shipment_id)
+            return
+        shipment_id = eta_shipment_id(path)
+        if shipment_id is not None:
+            self.send_shipment_eta(shipment_id)
             return
         self.send_json(
             HTTPStatus.NOT_FOUND,
@@ -178,6 +196,37 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                 shipment_id,
                 principal,
                 DEVICE_EVENTS,
+            )
+        except AccessControlError as exc:
+            status = HTTPStatus(exc.status_code)
+            self.send_json(
+                status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+                authenticate=status is HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        except ShipmentTrackingError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
+    def send_shipment_eta(self, shipment_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = SHIPMENT_TRACKING.eta_payload(
+                shipment_id,
+                principal,
+                DEVICE_EVENTS,
+                ETA_SERVICE,
             )
         except AccessControlError as exc:
             status = HTTPStatus(exc.status_code)
