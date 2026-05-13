@@ -133,6 +133,7 @@ class Cargo:
 @dataclass(frozen=True, slots=True)
 class Vehicle:
     id: str
+    warehouse_id: str
     vehicle_number: str
     plate_number: str
     device_id: str
@@ -145,6 +146,7 @@ class Vehicle:
     updated_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
+        _require_text(self.warehouse_id, "warehouse_id")
         _require_text(self.vehicle_number, "vehicle_number")
         _require_text(self.plate_number, "plate_number")
         _require_text(self.device_id, "device_id")

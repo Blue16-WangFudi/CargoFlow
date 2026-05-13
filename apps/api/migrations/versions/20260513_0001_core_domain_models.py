@@ -89,6 +89,7 @@ def upgrade() -> None:
     op.create_table(
         "vehicles",
         sa.Column("id", sa.String(length=36), primary_key=True),
+        sa.Column("warehouse_id", sa.String(length=64), nullable=False),
         sa.Column("vehicle_number", sa.String(length=64), nullable=False),
         sa.Column("plate_number", sa.String(length=32), nullable=False),
         sa.Column("device_id", sa.String(length=128), nullable=False),
@@ -131,6 +132,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("plate_number", name="uq_vehicles_plate_number"),
         sa.UniqueConstraint("device_id", name="uq_vehicles_device_id"),
     )
+    op.create_index("ix_vehicles_warehouse_id", "vehicles", ["warehouse_id"])
     op.create_index("ix_vehicles_driver_user_id", "vehicles", ["driver_user_id"])
 
     op.create_table(

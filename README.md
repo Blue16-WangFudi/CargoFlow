@@ -105,7 +105,8 @@ startup and check commands.
   `POST /api/vehicles/{vehicleId}/disable`, and
   `POST /api/vehicles/{vehicleId}/unbind` provide the current development
   vehicle management contract. Warehouse admins and system admins can maintain
-  vehicles; vehicle number, plate number, and device ID uniqueness is enforced.
+  vehicles; warehouse admins are scoped by `X-CargoFlow-Warehouse-Ids`.
+  Vehicle number, plate number, and device ID uniqueness is enforced.
 - `POST /api/cargo-bindings` lets a scoped warehouse admin or system admin bind
   cargo to an available vehicle. The binding creates or updates the active
   transport task, marks the vehicle as bound, registers the device-task binding,
