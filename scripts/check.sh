@@ -27,14 +27,25 @@ require_path "README.md"
 require_path "DESIGN.md"
 require_path "docs/exec-plans/2026-05-13-tech-architecture-constraints.md"
 require_path "scripts/check.sh"
+require_path "scripts/start.sh"
 require_path ".github/workflows/check.yml"
+require_path "infra/compose/dev.yml"
+require_path "apps/api/cargoflow_api/server.py"
+require_path "apps/api/tests/test_server.py"
+require_path "apps/web/index.html"
+require_path "apps/web/app.js"
+require_path "apps/web/styles.css"
 
 log "checking script syntax"
 bash -n scripts/check.sh || fail "shell syntax failed: scripts/check.sh"
+bash -n scripts/start.sh || fail "shell syntax failed: scripts/start.sh"
 
 log "checking script executability"
 if [[ ! -x "scripts/check.sh" ]]; then
   fail "script is not executable: scripts/check.sh"
+fi
+if [[ ! -x "scripts/start.sh" ]]; then
+  fail "script is not executable: scripts/start.sh"
 fi
 
 log "checking architecture decision coverage"
@@ -63,7 +74,7 @@ else
 fi
 
 log "checking Markdown links"
-python3 - <<'PY'
+if ! python3 - <<'PY'
 import pathlib
 import re
 import sys
@@ -101,6 +112,77 @@ if missing:
     print("\n".join(missing), file=sys.stderr)
     sys.exit(1)
 PY
+then
+  fail "Markdown link check failed"
+fi
+
+log "checking API skeleton"
+export PYTHONPATH="$ROOT_DIR/apps/api${PYTHONPATH:+:$PYTHONPATH}"
+python3 -m compileall -q apps/api || fail "python compile failed"
+python3 -m unittest discover -s apps/api/tests -p 'test_*.py' || fail "python tests failed"
+
+log "checking HTTP smoke path"
+if ! python3 - <<'PY'
+import json
+from urllib.request import urlopen
+
+from cargoflow_api.server import build_demo_shipment, build_health_payload, create_server
+
+health = build_health_payload()
+assert health["status"] == "ok", health
+
+shipment = build_demo_shipment()
+assert shipment["latestLocation"]["longitude"], shipment
+
+server = create_server("127.0.0.1", 0)
+try:
+    host, port = server.server_address
+    import threading
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    with urlopen(f"http://{host}:{port}/health", timeout=3) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    assert payload["service"] == "cargoflow-api", payload
+finally:
+    server.shutdown()
+    server.server_close()
+PY
+then
+  fail "HTTP smoke path failed"
+fi
+
+log "checking frontend asset wiring"
+if ! python3 - <<'PY'
+from pathlib import Path
+
+index = Path("apps/web/index.html").read_text(encoding="utf-8")
+for asset in ("./styles.css", "./app.js"):
+    if asset not in index:
+        raise SystemExit(f"apps/web/index.html does not reference {asset}")
+PY
+then
+  fail "frontend asset wiring failed"
+fi
+
+log "checking accidental secret patterns"
+secret_terms=(
+  "app""_secret"
+  "access""_token"
+  "-----BEGIN RSA ""PRIVATE KEY-----"
+  "-----BEGIN OPENSSH ""PRIVATE KEY-----"
+  "-----BEGIN EC ""PRIVATE KEY-----"
+)
+
+for term in "${secret_terms[@]}"; do
+  if command -v rg >/dev/null 2>&1; then
+    if rg -n --fixed-strings --glob '!.git/**' -- "$term" .; then
+      fail "secret-like term found: $term"
+    fi
+  elif grep -RInF --exclude-dir=.git -- "$term" .; then
+    fail "secret-like term found: $term"
+  fi
+done
 
 if [[ "$failures" -ne 0 ]]; then
   printf '[check] failed with %s issue(s)\n' "$failures" >&2
