@@ -84,6 +84,11 @@ startup and check commands.
   wired, local requests must send `X-CargoFlow-User-Id`, `X-CargoFlow-Role`,
   and `X-CargoFlow-Tenant-Id`; warehouse admins and dispatchers also send
   `X-CargoFlow-Warehouse-Ids` or `X-CargoFlow-Dispatch-Region-Ids`.
+- `POST /api/device-events` accepts the current development contract for
+  device GPS, heartbeat, and box-open/box-close events. Payloads must include
+  `eventId`, `eventType`, `deviceId`, `taskId`, `occurredAt`, `reportedAt`, and
+  `schemaVersion`; GPS events may update latest location only when coordinates,
+  capture time, and the active device-task binding are valid.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).
