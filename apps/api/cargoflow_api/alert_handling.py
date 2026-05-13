@@ -91,6 +91,7 @@ class AlertHandlingStore:
                     latest_evidence={
                         "eventType": "box_opened",
                         "reason": "Unauthorized box opening during active transport.",
+                        "ruleRegion": "box-security",
                     },
                     created_at=triggered_at,
                     updated_at=triggered_at,
