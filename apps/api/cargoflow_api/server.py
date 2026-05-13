@@ -26,6 +26,11 @@ from cargoflow_api.access_control import (
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
 from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
+from cargoflow_api.vehicle_management import (
+    VehicleManagementError,
+    VehicleStore,
+    vehicle_to_wire,
+)
 
 SERVICE_NAME = "cargoflow-api"
 MAX_JSON_BODY_BYTES = 32 * 1024
@@ -42,6 +47,7 @@ DEMO_SHIPMENT_SCOPE = ShipmentScope(
 SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
 DEVICE_EVENTS = DeviceEventStore.demo()
 ETA_SERVICE = EtaService()
+VEHICLES = VehicleStore.demo()
 
 
 def utc_now_iso() -> str:
@@ -118,6 +124,20 @@ def eta_shipment_id(path: str) -> str | None:
     return shipment_action_id(path, "eta")
 
 
+def vehicle_id_from_path(path: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 3 and parts[:2] == ["api", "vehicles"]:
+        return parts[2]
+    return None
+
+
+def vehicle_action_from_path(path: str, action: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 4 and parts[:2] == ["api", "vehicles"] and parts[3] == action:
+        return parts[2]
+    return None
+
+
 def shipment_action_id(path: str, action: str) -> str | None:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if len(parts) == 4 and parts[:2] == ["api", "shipments"]:
@@ -143,6 +163,13 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         if path == "/api/shipments/demo":
             self.send_guarded_demo_shipment()
             return
+        if path == "/api/vehicles":
+            self.send_vehicle_list()
+            return
+        vehicle_id = vehicle_id_from_path(path)
+        if vehicle_id is not None:
+            self.send_vehicle(vehicle_id)
+            return
         shipment_id = latest_location_shipment_id(path)
         if shipment_id is not None:
             self.send_latest_shipment_location(shipment_id)
@@ -163,6 +190,31 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/device-events":
             self.receive_device_event()
+            return
+        if path == "/api/vehicles":
+            self.create_vehicle()
+            return
+        vehicle_id = vehicle_action_from_path(path, "disable")
+        if vehicle_id is not None:
+            self.disable_vehicle(vehicle_id)
+            return
+        vehicle_id = vehicle_action_from_path(path, "unbind")
+        if vehicle_id is not None:
+            self.unbind_vehicle(vehicle_id)
+            return
+        self.send_json(
+            HTTPStatus.NOT_FOUND,
+            {
+                "error": "not_found",
+                "message": f"No CargoFlow route for {path}",
+            },
+        )
+
+    def do_PATCH(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        path = urlparse(self.path).path
+        vehicle_id = vehicle_id_from_path(path)
+        if vehicle_id is not None:
+            self.update_vehicle(vehicle_id)
             return
         self.send_json(
             HTTPStatus.NOT_FOUND,
@@ -188,6 +240,98 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             )
             return
         self.send_json(HTTPStatus.OK, payload)
+
+    def send_vehicle_list(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            vehicles = VEHICLES.list_vehicles(principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except VehicleManagementError as exc:
+            self.send_vehicle_error(exc)
+            return
+        self.send_json(
+            HTTPStatus.OK,
+            {
+                "vehicles": [vehicle_to_wire(vehicle) for vehicle in vehicles],
+                "count": len(vehicles),
+            },
+        )
+
+    def send_vehicle(self, vehicle_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            vehicle = VEHICLES.get_vehicle(vehicle_id, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except VehicleManagementError as exc:
+            self.send_vehicle_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"vehicle": vehicle_to_wire(vehicle)})
+
+    def create_vehicle(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            vehicle = VEHICLES.create_vehicle(payload, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except (DeviceEventError, VehicleManagementError) as exc:
+            self.send_vehicle_error(exc)
+            return
+        self.send_json(HTTPStatus.CREATED, {"vehicle": vehicle_to_wire(vehicle)})
+
+    def update_vehicle(self, vehicle_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            vehicle = VEHICLES.update_vehicle(vehicle_id, payload, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except (DeviceEventError, VehicleManagementError) as exc:
+            self.send_vehicle_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"vehicle": vehicle_to_wire(vehicle)})
+
+    def disable_vehicle(self, vehicle_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_optional_json_body()
+            reason = (
+                payload.get("reason")
+                if isinstance(payload.get("reason"), str)
+                else None
+            )
+            vehicle = VEHICLES.disable_vehicle(vehicle_id, principal, reason=reason)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except (DeviceEventError, VehicleManagementError) as exc:
+            self.send_vehicle_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"vehicle": vehicle_to_wire(vehicle)})
+
+    def unbind_vehicle(self, vehicle_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_optional_json_body()
+            reason = (
+                payload.get("reason")
+                if isinstance(payload.get("reason"), str)
+                else None
+            )
+            vehicle = VEHICLES.unbind_vehicle(vehicle_id, principal, reason=reason)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except (DeviceEventError, VehicleManagementError) as exc:
+            self.send_vehicle_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"vehicle": vehicle_to_wire(vehicle)})
 
     def send_latest_shipment_location(self, shipment_id: str) -> None:
         try:
@@ -265,6 +409,38 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.ACCEPTED, result.to_wire())
 
+    def send_access_error(self, exc: AccessControlError) -> None:
+        status = HTTPStatus(exc.status_code)
+        self.send_json(
+            status,
+            {
+                "error": exc.error_code,
+                "message": exc.message,
+            },
+            authenticate=status is HTTPStatus.UNAUTHORIZED,
+        )
+
+    def send_vehicle_error(
+        self,
+        exc: DeviceEventError | VehicleManagementError,
+    ) -> None:
+        if isinstance(exc, VehicleManagementError):
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(
+            HTTPStatus.BAD_REQUEST,
+            {
+                "error": exc.error_code,
+                "message": exc.message,
+            },
+        )
+
     def read_json_body(self) -> dict[str, Any]:
         content_length = self.headers.get("Content-Length", "0").strip()
         try:
@@ -283,6 +459,16 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise DeviceEventError("Request body must be a JSON object")
         return payload
+
+    def read_optional_json_body(self) -> dict[str, Any]:
+        content_length = self.headers.get("Content-Length", "0").strip()
+        try:
+            body_size = int(content_length)
+        except ValueError as exc:
+            raise DeviceEventError("Content-Length must be an integer") from exc
+        if body_size == 0:
+            return {}
+        return self.read_json_body()
 
     def log_message(self, format: str, *args: Any) -> None:
         timestamp = utc_now_iso()
@@ -313,7 +499,7 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
             (
