@@ -36,6 +36,13 @@ class TaskAlertContext:
 @dataclass(frozen=True, slots=True)
 class _TimedRuleState:
     started_at: datetime
+    region_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteDistance:
+    distance_m: float
+    region_key: str
 
 
 class AlertRuleStore:
@@ -43,7 +50,7 @@ class AlertRuleStore:
 
     def __init__(self, alerts: tuple[Alert, ...] = ()) -> None:
         self._alerts: dict[str, Alert] = {}
-        self._open_by_task_type: dict[tuple[str, AlertType], str] = {}
+        self._open_by_task_type_region: dict[tuple[str, AlertType, str], str] = {}
         for alert in alerts:
             self.save_alert(alert)
 
@@ -59,13 +66,13 @@ class AlertRuleStore:
     def save_alert(self, alert: Alert) -> Alert:
         previous = self._alerts.get(alert.id)
         if previous is not None:
-            previous_key = (previous.task_id, previous.alert_type)
-            if self._open_by_task_type.get(previous_key) == previous.id:
-                self._open_by_task_type.pop(previous_key, None)
+            previous_key = _alert_merge_key(previous)
+            if self._open_by_task_type_region.get(previous_key) == previous.id:
+                self._open_by_task_type_region.pop(previous_key, None)
 
         self._alerts[alert.id] = alert
         if alert.is_open:
-            self._open_by_task_type[(alert.task_id, alert.alert_type)] = alert.id
+            self._open_by_task_type_region[_alert_merge_key(alert)] = alert.id
         return alert
 
     def upsert_open_alert(
@@ -78,9 +85,11 @@ class AlertRuleStore:
         longitude: float | None,
         latitude: float | None,
         evidence: dict[str, Any],
+        region_key: str = "default",
     ) -> Alert:
-        key = (context.task_id, alert_type)
-        existing_id = self._open_by_task_type.get(key)
+        evidence = {**evidence, "ruleRegion": region_key}
+        key = (context.task_id, alert_type, region_key)
+        existing_id = self._open_by_task_type_region.get(key)
         if existing_id is not None:
             existing = self._alerts.get(existing_id)
             if existing is not None and existing.is_open:
@@ -92,7 +101,7 @@ class AlertRuleStore:
                     updated_at=triggered_at,
                 )
                 return self.save_alert(updated)
-            self._open_by_task_type.pop(key, None)
+            self._open_by_task_type_region.pop(key, None)
 
         alert = Alert(
             id=f"alert-{uuid4().hex}",
@@ -130,7 +139,7 @@ class AlertRuleEngine:
         context: TaskAlertContext,
         point: Any,
     ) -> tuple[Alert, ...]:
-        if context.status.is_terminal:
+        if not _can_trigger_transport_alert(context.status):
             return ()
 
         alerts: list[Alert] = []
@@ -150,7 +159,7 @@ class AlertRuleEngine:
         event_id: str,
         occurred_at: datetime,
     ) -> tuple[Alert, ...]:
-        if context.status.is_terminal:
+        if not _can_trigger_transport_alert(context.status):
             return ()
         if str(getattr(event_type, "value", event_type)) != "box_opened":
             return ()
@@ -167,6 +176,7 @@ class AlertRuleEngine:
                 "eventType": "box_opened",
                 "reason": "Unauthorized box opening during active transport.",
             },
+            region_key="box-security",
         )
         return (alert,)
 
@@ -179,15 +189,18 @@ class AlertRuleEngine:
             self._deviation_by_task.pop(context.task_id, None)
             return None
 
-        distance_m = _distance_to_route_m(point.longitude, point.latitude, context.route)
-        if distance_m <= self.route_deviation_distance_m:
+        route_distance = _distance_to_route_m(point.longitude, point.latitude, context.route)
+        if route_distance.distance_m <= self.route_deviation_distance_m:
             self._deviation_by_task.pop(context.task_id, None)
             return None
 
-        state = self._deviation_by_task.setdefault(
-            context.task_id,
-            _TimedRuleState(started_at=point.captured_at),
-        )
+        state = self._deviation_by_task.get(context.task_id)
+        if state is None or state.region_key != route_distance.region_key:
+            state = _TimedRuleState(
+                started_at=point.captured_at,
+                region_key=route_distance.region_key,
+            )
+            self._deviation_by_task[context.task_id] = state
         duration = point.captured_at - state.started_at
         if duration < self.route_deviation_duration:
             return None
@@ -199,9 +212,10 @@ class AlertRuleEngine:
             triggered_at=state.started_at,
             longitude=point.longitude,
             latitude=point.latitude,
+            region_key=state.region_key,
             evidence={
                 "eventId": point.event_id,
-                "distanceMeters": round(distance_m, 1),
+                "distanceMeters": round(route_distance.distance_m, 1),
                 "durationSeconds": int(duration.total_seconds()),
                 "thresholdMeters": int(self.route_deviation_distance_m),
                 "thresholdSeconds": int(self.route_deviation_duration.total_seconds()),
@@ -227,10 +241,11 @@ class AlertRuleEngine:
             self._stop_by_task.pop(context.task_id, None)
             return None
 
-        state = self._stop_by_task.setdefault(
-            context.task_id,
-            _TimedRuleState(started_at=point.captured_at),
-        )
+        region_key = _location_region_key(point.longitude, point.latitude)
+        state = self._stop_by_task.get(context.task_id)
+        if state is None or state.region_key != region_key:
+            state = _TimedRuleState(started_at=point.captured_at, region_key=region_key)
+            self._stop_by_task[context.task_id] = state
         duration = point.captured_at - state.started_at
         if duration < self.abnormal_stop_duration:
             return None
@@ -242,6 +257,7 @@ class AlertRuleEngine:
             triggered_at=state.started_at,
             longitude=point.longitude,
             latitude=point.latitude,
+            region_key=state.region_key,
             evidence={
                 "eventId": point.event_id,
                 "speedKph": speed,
@@ -287,11 +303,43 @@ def _distance_to_route_m(
     longitude: float,
     latitude: float,
     route: tuple[RoutePoint, ...],
-) -> float:
-    return min(
-        _distance_to_segment_m(longitude, latitude, start, end)
-        for start, end in zip(route, route[1:])
+) -> _RouteDistance:
+    distances = (
+        _RouteDistance(
+            distance_m=_distance_to_segment_m(longitude, latitude, start, end),
+            region_key=f"route-segment:{index}",
+        )
+        for index, (start, end) in enumerate(zip(route, route[1:]))
     )
+    return min(distances, key=lambda distance: distance.distance_m)
+
+
+def _can_trigger_transport_alert(status: TransportTaskStatus) -> bool:
+    return status in {
+        TransportTaskStatus.BOUND,
+        TransportTaskStatus.LOADED,
+        TransportTaskStatus.IN_TRANSIT,
+    }
+
+
+def _alert_merge_key(alert: Alert) -> tuple[str, AlertType, str]:
+    return (
+        alert.task_id,
+        alert.alert_type,
+        _evidence_region_key(alert.latest_evidence),
+    )
+
+
+def _evidence_region_key(evidence: dict[str, Any] | None) -> str:
+    if isinstance(evidence, dict):
+        region = evidence.get("ruleRegion")
+        if isinstance(region, str) and region.strip():
+            return region
+    return "default"
+
+
+def _location_region_key(longitude: float, latitude: float) -> str:
+    return f"grid:{round(longitude, 2):.2f}:{round(latitude, 2):.2f}"
 
 
 def _distance_to_segment_m(
