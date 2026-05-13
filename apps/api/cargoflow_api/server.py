@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from cargoflow_api import __version__
 from cargoflow_api.access_control import (
@@ -23,6 +23,7 @@ from cargoflow_api.access_control import (
     require_shipment_access,
 )
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
+from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
 
 SERVICE_NAME = "cargoflow-api"
 MAX_JSON_BODY_BYTES = 32 * 1024
@@ -36,6 +37,7 @@ DEMO_SHIPMENT_SCOPE = ShipmentScope(
     warehouse_ids=("warehouse-shanghai",),
     dispatch_region_ids=("east-china",),
 )
+SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
 DEVICE_EVENTS = DeviceEventStore.demo()
 
 
@@ -102,6 +104,14 @@ def build_authorized_demo_shipment(principal: Principal) -> dict[str, Any]:
     return payload
 
 
+def latest_location_shipment_id(path: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 4 and parts[:2] == ["api", "shipments"]:
+        if parts[3] == "latest-location":
+            return parts[2]
+    return None
+
+
 class CargoFlowHandler(BaseHTTPRequestHandler):
     server_version = f"{SERVICE_NAME}/{__version__}"
 
@@ -118,6 +128,10 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/shipments/demo":
             self.send_guarded_demo_shipment()
+            return
+        shipment_id = latest_location_shipment_id(path)
+        if shipment_id is not None:
+            self.send_latest_shipment_location(shipment_id)
             return
         self.send_json(
             HTTPStatus.NOT_FOUND,
@@ -153,6 +167,36 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                     "message": exc.message,
                 },
                 authenticate=status is HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
+    def send_latest_shipment_location(self, shipment_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = SHIPMENT_TRACKING.latest_location_payload(
+                shipment_id,
+                principal,
+                DEVICE_EVENTS,
+            )
+        except AccessControlError as exc:
+            status = HTTPStatus(exc.status_code)
+            self.send_json(
+                status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+                authenticate=status is HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        except ShipmentTrackingError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
             )
             return
         self.send_json(HTTPStatus.OK, payload)
