@@ -110,7 +110,9 @@ startup and check commands.
   device GPS, heartbeat, and box-open/box-close events. Payloads must include
   `eventId`, `eventType`, `deviceId`, `taskId`, `occurredAt`, `reportedAt`, and
   `schemaVersion`; GPS events may update latest location only when coordinates,
-  capture time, and the active device-task binding are valid.
+  capture time, and the active device-task binding are valid. Accepted GPS and
+  box-open events can return `generatedAlerts` when the current alert rules
+  create or merge route-deviation, abnormal-stop, or box-open alerts.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).

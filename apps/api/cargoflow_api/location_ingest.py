@@ -9,7 +9,19 @@ from threading import Lock
 from typing import Any, Mapping
 from uuid import uuid4
 
-from cargoflow_api.domain import LocationPoint, VehicleOnlineStatus
+from cargoflow_api.alert_rules import (
+    AlertRuleEngine,
+    AlertRuleStore,
+    RoutePoint,
+    TaskAlertContext,
+    alert_to_wire,
+)
+from cargoflow_api.domain import (
+    Alert,
+    LocationPoint,
+    TransportTaskStatus,
+    VehicleOnlineStatus,
+)
 
 
 class DeviceEventError(Exception):
@@ -68,6 +80,7 @@ class LatestLocationSnapshot:
     captured_at: datetime
     reported_at: datetime
     event_id: str
+    speed_kph: float | None = None
 
     @classmethod
     def from_point(cls, point: LocationPoint) -> "LatestLocationSnapshot":
@@ -82,10 +95,11 @@ class LatestLocationSnapshot:
             captured_at=point.captured_at,
             reported_at=point.reported_at,
             event_id=point.event_id,
+            speed_kph=point.speed_kph,
         )
 
     def to_wire(self) -> dict[str, Any]:
-        return {
+        payload = {
             "taskId": self.task_id,
             "vehicleId": self.vehicle_id,
             "deviceId": self.device_id,
@@ -95,6 +109,9 @@ class LatestLocationSnapshot:
             "reportedAt": self.reported_at.isoformat(),
             "eventId": self.event_id,
         }
+        if self.speed_kph is not None:
+            payload["speedKph"] = self.speed_kph
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +146,7 @@ class DeviceEventResult:
     latest_location_updated: bool
     latest_location: LatestLocationSnapshot | None = None
     ignored_reason: str | None = None
+    generated_alerts: tuple[Alert, ...] = ()
 
     def to_wire(self) -> dict[str, Any]:
         payload = {
@@ -143,6 +161,10 @@ class DeviceEventResult:
             payload["latestLocation"] = self.latest_location.to_wire()
         if self.ignored_reason:
             payload["ignoredReason"] = self.ignored_reason
+        if self.generated_alerts:
+            payload["generatedAlerts"] = [
+                alert_to_wire(alert) for alert in self.generated_alerts
+            ]
         return payload
 
 
@@ -159,9 +181,19 @@ class DeviceEventStore:
 
     max_future_skew = timedelta(minutes=5)
 
-    def __init__(self, bindings: tuple[DeviceTaskBinding, ...]) -> None:
+    def __init__(
+        self,
+        bindings: tuple[DeviceTaskBinding, ...],
+        *,
+        alert_engine: AlertRuleEngine | None = None,
+        task_alert_contexts: tuple[TaskAlertContext, ...] = (),
+    ) -> None:
         self._states = {
             binding.device_id: DeviceState(binding=binding) for binding in bindings
+        }
+        self._alert_engine = alert_engine
+        self._task_alert_contexts = {
+            context.task_id: context for context in task_alert_contexts
         }
         self._latest_by_task: dict[str, LatestLocationSnapshot] = {}
         self._locations_by_task: dict[str, list[LatestLocationSnapshot]] = {}
@@ -178,7 +210,20 @@ class DeviceEventStore:
                     task_id="task-demo-001",
                     vehicle_id="vehicle-demo-001",
                 ),
-            )
+            ),
+            alert_engine=AlertRuleEngine(AlertRuleStore()),
+            task_alert_contexts=(
+                TaskAlertContext(
+                    task_id="task-demo-001",
+                    cargo_id="cargo-demo-001",
+                    vehicle_id="vehicle-demo-001",
+                    status=TransportTaskStatus.IN_TRANSIT,
+                    route=(
+                        RoutePoint(longitude=121.4737, latitude=31.2304),
+                        RoutePoint(longitude=121.5956, latitude=31.3479),
+                    ),
+                ),
+            ),
         )
         store.ingest(
             {
@@ -236,7 +281,19 @@ class DeviceEventStore:
                 self._security_events_by_task.setdefault(event.task_id, []).append(
                     snapshot
                 )
-                return event.accepted_without_location()
+                result = event.accepted_without_location()
+                generated_alerts = self._evaluate_security_alerts(event)
+                if not generated_alerts:
+                    return result
+                return DeviceEventResult(
+                    event_id=result.event_id,
+                    event_type=result.event_type,
+                    task_id=result.task_id,
+                    device_id=result.device_id,
+                    received=result.received,
+                    latest_location_updated=result.latest_location_updated,
+                    generated_alerts=generated_alerts,
+                )
 
             return self._ingest_gps(event, state.binding)
 
@@ -294,6 +351,7 @@ class DeviceEventStore:
         snapshot = LatestLocationSnapshot.from_point(point)
         self._latest_by_task[event.task_id] = snapshot
         self._locations_by_task.setdefault(event.task_id, []).append(snapshot)
+        generated_alerts = self._evaluate_location_alerts(snapshot)
         return DeviceEventResult(
             event_id=event.event_id,
             event_type=event.event_type,
@@ -302,6 +360,34 @@ class DeviceEventStore:
             received=True,
             latest_location_updated=True,
             latest_location=snapshot,
+            generated_alerts=generated_alerts,
+        )
+
+    def _evaluate_location_alerts(
+        self,
+        snapshot: LatestLocationSnapshot,
+    ) -> tuple[Alert, ...]:
+        if self._alert_engine is None:
+            return ()
+        context = self._task_alert_contexts.get(snapshot.task_id)
+        if context is None:
+            return ()
+        return self._alert_engine.evaluate_location(context, snapshot)
+
+    def _evaluate_security_alerts(
+        self,
+        event: "ParsedDeviceEvent",
+    ) -> tuple[Alert, ...]:
+        if self._alert_engine is None:
+            return ()
+        context = self._task_alert_contexts.get(event.task_id)
+        if context is None:
+            return ()
+        return self._alert_engine.evaluate_security_event(
+            context,
+            event_type=event.event_type,
+            event_id=event.event_id,
+            occurred_at=event.occurred_at,
         )
 
 
