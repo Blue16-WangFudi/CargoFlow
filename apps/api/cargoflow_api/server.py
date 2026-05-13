@@ -23,6 +23,11 @@ from cargoflow_api.access_control import (
     parse_principal,
     require_shipment_access,
 )
+from cargoflow_api.driver_status_reporting import (
+    DriverStatusReportError,
+    parse_driver_status_report_payload,
+    status_report_to_wire,
+)
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
 from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
@@ -128,6 +133,10 @@ def trajectory_shipment_id(path: str) -> str | None:
     return shipment_action_id(path, "trajectory")
 
 
+def driver_status_report_shipment_id(path: str) -> str | None:
+    return shipment_action_id(path, "driver-status-reports")
+
+
 def vehicle_id_from_path(path: str) -> str | None:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if len(parts) == 3 and parts[:2] == ["api", "vehicles"]:
@@ -201,6 +210,10 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/vehicles":
             self.create_vehicle()
+            return
+        shipment_id = driver_status_report_shipment_id(path)
+        if shipment_id is not None:
+            self.receive_driver_status_report(shipment_id)
             return
         vehicle_id = vehicle_action_from_path(path, "disable")
         if vehicle_id is not None:
@@ -446,6 +459,59 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             )
             return
         self.send_json(HTTPStatus.ACCEPTED, result.to_wire())
+
+    def receive_driver_status_report(self, shipment_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            report_payload = parse_driver_status_report_payload(
+                payload,
+                now=datetime.now(UTC),
+            )
+            report, record = SHIPMENT_TRACKING.add_driver_status_report(
+                shipment_id,
+                principal,
+                report_payload,
+            )
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except ShipmentTrackingError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        except DriverStatusReportError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        except DeviceEventError as exc:
+            self.send_json(
+                HTTPStatus.BAD_REQUEST,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(
+            HTTPStatus.CREATED,
+            {
+                "shipmentId": record.shipment_id,
+                "taskId": record.task_id,
+                "transportStatus": record.transport_status.value,
+                "statusReport": status_report_to_wire(report),
+            },
+        )
 
     def send_access_error(self, exc: AccessControlError) -> None:
         status = HTTPStatus(exc.status_code)

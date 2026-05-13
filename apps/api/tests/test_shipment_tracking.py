@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from cargoflow_api.access_control import AuthorizationError, Principal, Role
 from cargoflow_api.domain import StatusReportState, TransportTaskStatus
+from cargoflow_api.driver_status_reporting import DriverStatusReportConflictError
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventStore, DeviceTaskBinding
 from cargoflow_api.shipment_tracking import (
@@ -262,6 +263,85 @@ class ShipmentTrackingStoreTests(unittest.TestCase):
 
         self.assertEqual(payload["summary"]["gpsPointCount"], 0)
         self.assertEqual(payload["trajectory"][0]["kind"], "status_report")
+
+    def test_add_driver_status_report_updates_task_and_trajectory(self) -> None:
+        record = ShipmentTrackingRecord(
+            shipment_id="CGF-REPORT-001",
+            cargo_id="cargo-report-001",
+            task_id="task-report-001",
+            tenant_id="cgf-demo",
+            owner_user_id="owner-acme",
+            driver_user_id="driver-demo",
+            warehouse_ids=("warehouse-shanghai",),
+            dispatch_region_ids=("east-china",),
+            transport_status=TransportTaskStatus.BOUND,
+            vehicle=VehicleSummary(
+                vehicle_id="vehicle-report-001",
+                vehicle_number="VH-REPORT-001",
+                plate_number="CF-2030",
+                device_id="gps-report-001",
+                driver_user_id="driver-demo",
+            ),
+        )
+        tracking = ShipmentTrackingStore((record,))
+        driver = Principal("driver-demo", Role.DRIVER, "cgf-demo")
+
+        from cargoflow_api.driver_status_reporting import DriverStatusReportPayload
+
+        report, updated = tracking.add_driver_status_report(
+            "CGF-REPORT-001",
+            driver,
+            DriverStatusReportPayload(
+                report_status=StatusReportState.LOADED,
+                reported_at=datetime(2026, 5, 13, 10, 15, tzinfo=UTC),
+                note="Loaded at dock 3",
+                attachment_urls=("https://files.example.com/loading-photo.jpg",),
+            ),
+        )
+
+        self.assertEqual(report.reporter_user_id, "driver-demo")
+        self.assertEqual(updated.transport_status, TransportTaskStatus.LOADED)
+        payload = tracking.trajectory_payload(
+            "CGF-REPORT-001",
+            Principal("owner-acme", Role.CARGO_OWNER, "cgf-demo"),
+            DeviceEventStore(
+                (
+                    DeviceTaskBinding(
+                        device_id="gps-report-001",
+                        task_id="task-report-001",
+                        vehicle_id="vehicle-report-001",
+                    ),
+                )
+            ),
+        )
+        self.assertEqual(payload["transportStatus"], "loaded")
+        status_points = [
+            point for point in payload["trajectory"] if point["kind"] == "status_report"
+        ]
+        self.assertEqual(len(status_points), 1)
+        self.assertEqual(status_points[0]["reportStatus"], "loaded")
+        self.assertEqual(status_points[0]["note"], "Loaded at dock 3")
+        self.assertEqual(
+            status_points[0]["attachmentUrls"],
+            ["https://files.example.com/loading-photo.jpg"],
+        )
+
+    def test_add_driver_status_report_rejects_non_forward_status(self) -> None:
+        driver = Principal("driver-demo", Role.DRIVER, "cgf-demo")
+
+        from cargoflow_api.driver_status_reporting import DriverStatusReportPayload
+
+        with self.assertRaises(DriverStatusReportConflictError):
+            self.tracking.add_driver_status_report(
+                "CGF-DEMO-001",
+                driver,
+                DriverStatusReportPayload(
+                    report_status=StatusReportState.LOADED,
+                    reported_at=datetime(2026, 5, 13, 10, 15, tzinfo=UTC),
+                    note=None,
+                    attachment_urls=(),
+                ),
+            )
 
 
 if __name__ == "__main__":
