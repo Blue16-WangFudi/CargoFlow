@@ -39,14 +39,34 @@ class _TimedRuleState:
 
 
 class AlertRuleStore:
-    """Keeps open alerts and transient rule timers until persistence lands."""
+    """Keeps alerts and transient rule timers until persistence lands."""
 
-    def __init__(self) -> None:
+    def __init__(self, alerts: tuple[Alert, ...] = ()) -> None:
         self._alerts: dict[str, Alert] = {}
         self._open_by_task_type: dict[tuple[str, AlertType], str] = {}
+        for alert in alerts:
+            self.save_alert(alert)
 
     def open_alerts(self, task_id: str) -> tuple[Alert, ...]:
         return tuple(alert for alert in self._alerts.values() if alert.task_id == task_id and alert.is_open)
+
+    def alerts(self) -> tuple[Alert, ...]:
+        return tuple(sorted(self._alerts.values(), key=lambda alert: alert.triggered_at))
+
+    def get_alert(self, alert_id: str) -> Alert | None:
+        return self._alerts.get(alert_id)
+
+    def save_alert(self, alert: Alert) -> Alert:
+        previous = self._alerts.get(alert.id)
+        if previous is not None:
+            previous_key = (previous.task_id, previous.alert_type)
+            if self._open_by_task_type.get(previous_key) == previous.id:
+                self._open_by_task_type.pop(previous_key, None)
+
+        self._alerts[alert.id] = alert
+        if alert.is_open:
+            self._open_by_task_type[(alert.task_id, alert.alert_type)] = alert.id
+        return alert
 
     def upsert_open_alert(
         self,
@@ -62,16 +82,17 @@ class AlertRuleStore:
         key = (context.task_id, alert_type)
         existing_id = self._open_by_task_type.get(key)
         if existing_id is not None:
-            existing = self._alerts[existing_id]
-            updated = replace(
-                existing,
-                longitude=longitude,
-                latitude=latitude,
-                latest_evidence=evidence,
-                updated_at=triggered_at,
-            )
-            self._alerts[existing.id] = updated
-            return updated
+            existing = self._alerts.get(existing_id)
+            if existing is not None and existing.is_open:
+                updated = replace(
+                    existing,
+                    longitude=longitude,
+                    latitude=latitude,
+                    latest_evidence=evidence,
+                    updated_at=triggered_at,
+                )
+                return self.save_alert(updated)
+            self._open_by_task_type.pop(key, None)
 
         alert = Alert(
             id=f"alert-{uuid4().hex}",
@@ -89,9 +110,7 @@ class AlertRuleStore:
             created_at=triggered_at,
             updated_at=triggered_at,
         )
-        self._alerts[alert.id] = alert
-        self._open_by_task_type[key] = alert.id
-        return alert
+        return self.save_alert(alert)
 
 
 class AlertRuleEngine:
@@ -251,6 +270,16 @@ def alert_to_wire(alert: Alert) -> dict[str, Any]:
         payload["latitude"] = alert.latitude
     if alert.latest_evidence is not None:
         payload["latestEvidence"] = alert.latest_evidence
+    if alert.handled_by_user_id is not None:
+        payload["handledByUserId"] = alert.handled_by_user_id
+    if alert.handled_at is not None:
+        payload["handledAt"] = alert.handled_at.isoformat()
+    if alert.closed_by_user_id is not None:
+        payload["closedByUserId"] = alert.closed_by_user_id
+    if alert.closed_at is not None:
+        payload["closedAt"] = alert.closed_at.isoformat()
+    if alert.close_reason is not None:
+        payload["closeReason"] = alert.close_reason
     return payload
 
 
