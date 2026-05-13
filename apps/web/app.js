@@ -5,6 +5,12 @@ const apiBase =
 
 window.localStorage.setItem("cargoflowApiBase", apiBase);
 
+const demoAuthHeaders = {
+  "X-CargoFlow-User-Id": "owner-acme",
+  "X-CargoFlow-Role": "cargo_owner",
+  "X-CargoFlow-Tenant-Id": "cgf-demo",
+};
+
 const text = (id, value) => {
   document.getElementById(id).textContent = value;
 };
@@ -35,7 +41,9 @@ async function loadConsole() {
     const health = await healthResponse.json();
     setStatus(`${health.service} ${health.status}`, "ok");
 
-    const shipmentResponse = await fetch(`${apiBase}/api/shipments/demo`);
+    const shipmentResponse = await fetch(`${apiBase}/api/shipments/demo`, {
+      headers: demoAuthHeaders,
+    });
     if (!shipmentResponse.ok) {
       throw new Error(`Shipment API failed: ${shipmentResponse.status}`);
     }

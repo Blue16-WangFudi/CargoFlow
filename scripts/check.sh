@@ -144,6 +144,32 @@ try:
     with urlopen(f"http://{host}:{port}/health", timeout=3) as response:
         payload = json.loads(response.read().decode("utf-8"))
     assert payload["service"] == "cargoflow-api", payload
+    from urllib.request import Request
+
+    request = Request(
+        f"http://{host}:{port}/api/shipments/demo",
+        headers={
+            "X-CargoFlow-User-Id": "owner-acme",
+            "X-CargoFlow-Role": "cargo_owner",
+            "X-CargoFlow-Tenant-Id": "cgf-demo",
+        },
+    )
+    with urlopen(request, timeout=3) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    assert payload["shipmentId"] == "CGF-DEMO-001", payload
+    assert payload["access"]["role"] == "cargo_owner", payload
+    request = Request(
+        f"http://{host}:{port}/api/shipments/demo",
+        method="OPTIONS",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-CargoFlow-User-Id",
+        },
+    )
+    with urlopen(request, timeout=3) as response:
+        assert response.status == 204, response.status
+        assert "X-CargoFlow-User-Id" in response.headers["Access-Control-Allow-Headers"]
 finally:
     server.shutdown()
     server.server_close()
