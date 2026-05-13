@@ -49,6 +49,7 @@ Default URLs:
 
 - API health: http://127.0.0.1:8000/health
 - Demo shipment API: http://127.0.0.1:8000/api/shipments/demo
+- Demo latest location API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/latest-location
 - Frontend console: http://127.0.0.1:5173
 
 Ports can be changed with environment variables:
@@ -84,6 +85,10 @@ startup and check commands.
   wired, local requests must send `X-CargoFlow-User-Id`, `X-CargoFlow-Role`,
   and `X-CargoFlow-Tenant-Id`; warehouse admins and dispatchers also send
   `X-CargoFlow-Warehouse-Ids` or `X-CargoFlow-Dispatch-Region-Ids`.
+- `GET /api/shipments/{shipmentId}/latest-location` returns the bound cargo's
+  latest accepted GPS location, update time, transport status, vehicle summary,
+  and delay hint. The same development identity headers apply; cargo owners can
+  only read their own shipments.
 - `POST /api/device-events` accepts the current development contract for
   device GPS, heartbeat, and box-open/box-close events. Payloads must include
   `eventId`, `eventType`, `deviceId`, `taskId`, `occurredAt`, `reportedAt`, and

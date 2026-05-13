@@ -147,7 +147,7 @@ class DeviceEventStore:
 
     @classmethod
     def demo(cls) -> "DeviceEventStore":
-        return cls(
+        store = cls(
             (
                 DeviceTaskBinding(
                     device_id="gps-demo-001",
@@ -156,6 +156,22 @@ class DeviceEventStore:
                 ),
             )
         )
+        store.ingest(
+            {
+                "eventId": "evt-demo-seed-location",
+                "eventType": "gps",
+                "deviceId": "gps-demo-001",
+                "taskId": "task-demo-001",
+                "occurredAt": "2026-05-13T10:00:00+00:00",
+                "reportedAt": "2026-05-13T10:00:03+00:00",
+                "schemaVersion": 1,
+                "longitude": 121.4737,
+                "latitude": 31.2304,
+                "speedKph": 48.5,
+                "headingDegrees": 86,
+            }
+        )
+        return store
 
     def ingest(self, payload: Mapping[str, Any]) -> DeviceEventResult:
         event = parse_device_event(payload)

@@ -13,6 +13,7 @@ from cargoflow_api.server import (
     build_demo_shipment,
     build_health_payload,
     create_server,
+    latest_location_shipment_id,
 )
 from cargoflow_api.access_control import Principal, Role
 from cargoflow_api.location_ingest import DeviceEventStore
@@ -49,6 +50,17 @@ class PayloadTests(unittest.TestCase):
 
         self.assertEqual(shipment["access"]["role"], "cargo_owner")
         self.assertEqual(shipment["access"]["principalId"], "owner-acme")
+
+    def test_latest_location_route_parser_extracts_shipment_id(self) -> None:
+        self.assertEqual(
+            latest_location_shipment_id("/api/shipments/CGF-DEMO-001/latest-location"),
+            "CGF-DEMO-001",
+        )
+        self.assertEqual(
+            latest_location_shipment_id("/api/shipments/CGF%20DEMO/latest-location"),
+            "CGF DEMO",
+        )
+        self.assertIsNone(latest_location_shipment_id("/api/shipments/demo"))
 
 
 class HttpRouteTests(unittest.TestCase):
@@ -113,6 +125,40 @@ class HttpRouteTests(unittest.TestCase):
         self.assertEqual(error.code, 403)
         self.assertEqual(payload["error"], "forbidden")
 
+    def test_latest_location_route_returns_bound_shipment_snapshot(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/latest-location",
+            headers=DEMO_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["shipmentId"], "CGF-DEMO-001")
+        self.assertEqual(payload["transportStatus"], "in_transit")
+        self.assertEqual(payload["vehicle"]["deviceId"], "gps-demo-001")
+        self.assertEqual(payload["latestLocation"]["eventId"], "evt-demo-seed-location")
+        self.assertIn("delayHint", payload)
+
+    def test_latest_location_route_rejects_forbidden_owner(self) -> None:
+        headers = {
+            **DEMO_AUTH_HEADERS,
+            "X-CargoFlow-User-Id": "owner-other",
+        }
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/latest-location",
+            headers=headers,
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "forbidden")
+
     def test_demo_shipment_route_supports_cors_preflight(self) -> None:
         request = Request(
             f"{self.base_url}/api/shipments/demo",
@@ -166,6 +212,14 @@ class HttpRouteTests(unittest.TestCase):
             shipment = json.loads(response.read().decode("utf-8"))
         self.assertEqual(shipment["latestLocation"]["eventId"], "evt-http-gps-1")
         self.assertEqual(shipment["latestLocation"]["longitude"], 121.5)
+        latest_request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/latest-location",
+            headers=DEMO_AUTH_HEADERS,
+        )
+        with urlopen(latest_request, timeout=3) as response:
+            latest = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(latest["latestLocation"]["eventId"], "evt-http-gps-1")
+        self.assertEqual(latest["latestLocation"]["longitude"], 121.5)
 
     def test_device_event_route_accepts_heartbeat_and_box_events(self) -> None:
         for payload in (

@@ -159,6 +159,18 @@ try:
     assert payload["shipmentId"] == "CGF-DEMO-001", payload
     assert payload["access"]["role"] == "cargo_owner", payload
     request = Request(
+        f"http://{host}:{port}/api/shipments/CGF-DEMO-001/latest-location",
+        headers={
+            "X-CargoFlow-User-Id": "owner-acme",
+            "X-CargoFlow-Role": "cargo_owner",
+            "X-CargoFlow-Tenant-Id": "cgf-demo",
+        },
+    )
+    with urlopen(request, timeout=3) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    assert payload["latestLocation"]["updatedAt"], payload
+    assert payload["transportStatus"] == "in_transit", payload
+    request = Request(
         f"http://{host}:{port}/api/shipments/demo",
         method="OPTIONS",
         headers={
