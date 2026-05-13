@@ -87,6 +87,8 @@ class VehicleStore:
         require_vehicle_manager(principal)
         vehicle = vehicle_from_payload(payload)
         with self._lock:
+            if vehicle.id in self._vehicles:
+                raise VehicleConflictError("vehicleId")
             self._ensure_unique(vehicle)
             self._vehicles[vehicle.id] = vehicle
         return vehicle

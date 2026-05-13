@@ -100,6 +100,18 @@ class VehicleStoreTests(unittest.TestCase):
                 WAREHOUSE_ADMIN,
             )
 
+    def test_create_rejects_duplicate_vehicle_id(self) -> None:
+        with self.assertRaises(VehicleConflictError):
+            self.store.create_vehicle(
+                {
+                    "vehicleId": "vehicle-1",
+                    "vehicleNumber": "VH-002",
+                    "plateNumber": "SH-B12345",
+                    "deviceId": "gps-002",
+                },
+                WAREHOUSE_ADMIN,
+            )
+
     def test_update_rejects_duplicate_device_id(self) -> None:
         self.store.create_vehicle(
             {
