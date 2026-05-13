@@ -102,6 +102,35 @@ class AlertHandlingStoreTests(unittest.TestCase):
                 self.dispatcher,
             )
 
+    def test_create_dispatch_command_records_chain_and_moves_alert_to_processing(self) -> None:
+        issued_at = datetime(2026, 5, 13, 10, 7, tzinfo=UTC)
+
+        alert, command = self.store.create_dispatch_command(
+            "alert-1",
+            {
+                "content": "Ask the driver to pull over and inspect the cargo seal.",
+                "targetType": "driver",
+                "targetId": "driver-1",
+            },
+            self.dispatcher,
+            now=issued_at,
+        )
+        detail = self.store.alert_detail_payload("alert-1", self.dispatcher)
+
+        self.assertEqual(alert.status, AlertStatus.PROCESSING)
+        self.assertEqual(alert.handled_by_user_id, "dispatcher-1")
+        self.assertEqual(command.status, DispatchCommandStatus.SENT)
+        self.assertEqual(command.command_number, "CMD-20260513-001")
+        self.assertEqual(
+            command.content,
+            "Ask the driver to pull over and inspect the cargo seal.",
+        )
+        self.assertEqual(detail["chain"]["dispatchCommandCount"], 1)
+        self.assertEqual(
+            detail["dispatchCommands"][0]["commandNumber"],
+            "CMD-20260513-001",
+        )
+
     def test_list_alerts_filters_by_status_and_dispatch_scope(self) -> None:
         self.alert_store.save_alert(
             Alert(

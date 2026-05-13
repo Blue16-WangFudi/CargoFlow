@@ -29,6 +29,7 @@ from cargoflow_api.alert_handling import (
     AlertScope,
     alert_log_filters_from_query,
     alerts_to_wire,
+    dispatch_command_to_wire,
 )
 from cargoflow_api.alert_rules import AlertRuleStore, alert_to_wire
 from cargoflow_api.cargo_binding import CargoBindingError, CargoBindingStore
@@ -252,6 +253,10 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         if alert_id is not None:
             self.close_alert(alert_id)
             return
+        alert_id = alert_action_from_path(path, "dispatch-commands")
+        if alert_id is not None:
+            self.create_dispatch_command(alert_id)
+            return
         alert_id = alert_action_from_path(path, "false-positive")
         if alert_id is not None:
             self.mark_alert_false_positive(alert_id)
@@ -467,14 +472,14 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
     def send_alert(self, alert_id: str) -> None:
         try:
             principal = parse_principal(self.headers)
-            alert = ALERT_HANDLING.get_alert(alert_id, principal)
+            payload = ALERT_HANDLING.alert_detail_payload(alert_id, principal)
         except AccessControlError as exc:
             self.send_access_error(exc)
             return
         except AlertHandlingError as exc:
             self.send_alert_error(exc)
             return
-        self.send_json(HTTPStatus.OK, {"alert": alert_to_wire(alert)})
+        self.send_json(HTTPStatus.OK, {"alert": payload})
 
     def process_alert(self, alert_id: str) -> None:
         try:
@@ -503,6 +508,33 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             self.send_alert_error(exc)
             return
         self.send_json(HTTPStatus.OK, {"alert": alert_to_wire(alert)})
+
+    def create_dispatch_command(self, alert_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            alert, command = ALERT_HANDLING.create_dispatch_command(
+                alert_id,
+                payload,
+                principal,
+            )
+            detail = ALERT_HANDLING.alert_detail_payload(alert.id, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DeviceEventError as exc:
+            self.send_device_event_error(exc)
+            return
+        except AlertHandlingError as exc:
+            self.send_alert_error(exc)
+            return
+        self.send_json(
+            HTTPStatus.CREATED,
+            {
+                "alert": detail,
+                "dispatchCommand": dispatch_command_to_wire(command),
+            },
+        )
 
     def mark_alert_false_positive(self, alert_id: str) -> None:
         try:

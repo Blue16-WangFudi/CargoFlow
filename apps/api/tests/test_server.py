@@ -469,6 +469,55 @@ class HttpRouteTests(unittest.TestCase):
         self.assertEqual(error.code, 409)
         self.assertEqual(payload["error"], "alert_state_conflict")
 
+    def test_alert_detail_and_dispatch_command_route_return_command_chain(self) -> None:
+        detail_request = Request(
+            f"{self.base_url}/api/alerts/alert-demo-box-001",
+            headers=DISPATCHER_AUTH_HEADERS,
+        )
+        with urlopen(detail_request, timeout=3) as response:
+            detail = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(detail["alert"]["alertId"], "alert-demo-box-001")
+        self.assertEqual(detail["alert"]["chain"]["dispatchCommandCount"], 1)
+        self.assertEqual(
+            detail["alert"]["dispatchCommands"][0]["status"],
+            "acknowledged",
+        )
+
+        create_request = Request(
+            f"{self.base_url}/api/alerts/alert-demo-box-001/dispatch-commands",
+            data=json.dumps(
+                {
+                    "content": "Call the driver and request seal inspection.",
+                    "targetType": "driver",
+                    "targetId": "driver-demo",
+                }
+            ).encode("utf-8"),
+            headers={
+                **DISPATCHER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(create_request, timeout=3) as response:
+            created = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(created["alert"]["status"], "processing")
+        self.assertEqual(created["dispatchCommand"]["status"], "sent")
+        self.assertEqual(created["dispatchCommand"]["targetId"], "driver-demo")
+        self.assertEqual(created["alert"]["chain"]["dispatchCommandCount"], 2)
+
+        refreshed_request = Request(
+            f"{self.base_url}/api/alerts/alert-demo-box-001",
+            headers=DISPATCHER_AUTH_HEADERS,
+        )
+        with urlopen(refreshed_request, timeout=3) as response:
+            refreshed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(refreshed["alert"]["chain"]["dispatchCommandCount"], 2)
+
     def test_alert_routes_mark_false_positive_terminal_status(self) -> None:
         request = Request(
             f"{self.base_url}/api/alerts/alert-demo-box-001/false-positive",
