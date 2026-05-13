@@ -79,8 +79,11 @@ startup and check commands.
 ## API Surface
 
 - `GET /health` returns service status and version metadata.
-- `GET /api/shipments/demo` returns a demo shipment snapshot for frontend and
-  integration smoke checks.
+- `GET /api/shipments/demo` returns a guarded demo shipment snapshot for
+  frontend and integration smoke checks. Until a real identity provider is
+  wired, local requests must send `X-CargoFlow-User-Id`, `X-CargoFlow-Role`,
+  and `X-CargoFlow-Tenant-Id`; warehouse admins and dispatchers also send
+  `X-CargoFlow-Warehouse-Ids` or `X-CargoFlow-Dispatch-Region-Ids`.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).
