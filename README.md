@@ -24,8 +24,8 @@ Details and constraints are tracked in [docs/exec-plans/2026-05-13-tech-architec
 
 ```text
 apps/
-  api/          FastAPI service
-  web/          React/Vite application
+  api/          API service skeleton
+  web/          Frontend console skeleton
 packages/
   contracts/    Shared OpenAPI/types generated from backend contracts
 infra/
@@ -33,19 +33,58 @@ infra/
 docs/
   exec-plans/   Durable execution plans and architecture decisions
 scripts/
+  start.sh      Starts the current local API and frontend
   check.sh      Repository quality gate
 ```
 
 ## Local Development Contract
 
-The first product-code slice should provide these commands:
+Start the current minimal API and frontend without installing dependencies:
+
+```bash
+scripts/start.sh
+```
+
+Default URLs:
+
+- API health: http://127.0.0.1:8000/health
+- Demo shipment API: http://127.0.0.1:8000/api/shipments/demo
+- Frontend console: http://127.0.0.1:5173
+
+Ports can be changed with environment variables:
+
+```bash
+API_PORT=8010 FRONTEND_PORT=5180 scripts/start.sh
+```
+
+The Docker Compose baseline mirrors the planned service boundary and runs the
+same skeleton services:
 
 ```bash
 docker compose -f infra/compose/dev.yml up --build
+```
+
+Run the local quality gate:
+
+```bash
 scripts/check.sh
 ```
 
-Until product code is added, `scripts/check.sh` validates the repository documentation, links, conflict markers, and architecture references. Future implementation slices must extend it with backend tests, frontend tests, type checks, and builds instead of replacing it.
+The first skeleton intentionally uses Python standard-library servers so a new
+contributor can verify the flow before FastAPI, React/Vite, PostgreSQL, Redis,
+and MQTT dependencies are introduced. Future product slices should replace the
+temporary internals with the architecture choices above while preserving the
+startup and check commands.
+
+## API Surface
+
+- `GET /health` returns service status and version metadata.
+- `GET /api/shipments/demo` returns a demo shipment snapshot for frontend and
+  integration smoke checks.
+
+`scripts/check.sh` validates architecture references, Markdown links, script
+syntax, required skeleton files, Python unit and HTTP smoke tests, frontend
+asset wiring, conflict markers, and common accidental secret patterns.
 
 ## Task Source
 

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CargoFlow Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel status-panel" aria-labelledby="status-title">
+        <div>
+          <p class="eyebrow">CargoFlow</p>
+          <h1 id="status-title">Operations Console</h1>
+        </div>
+        <div class="service-status" id="service-status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">Checking API</span>
+        </div>
+      </section>
+
+      <section class="grid" aria-label="Demo shipment overview">
+        <article class="panel metric">
+          <span class="metric-label">Shipment</span>
+          <strong id="shipment-id">-</strong>
+          <span id="shipment-status">Waiting for API</span>
+        </article>
+        <article class="panel metric">
+          <span class="metric-label">Vehicle</span>
+          <strong id="vehicle">-</strong>
+          <span id="driver">-</span>
+        </article>
+        <article class="panel metric">
+          <span class="metric-label">ETA</span>
+          <strong id="eta">-</strong>
+          <span id="distance">-</span>
+        </article>
+      </section>
+
+      <section class="panel details" aria-labelledby="location-title">
+        <h2 id="location-title">Latest Location</h2>
+        <dl>
+          <div>
+            <dt>Longitude</dt>
+            <dd id="longitude">-</dd>
+          </div>
+          <div>
+            <dt>Latitude</dt>
+            <dd id="latitude">-</dd>
+          </div>
+          <div>
+            <dt>Recorded At</dt>
+            <dd id="recorded-at">-</dd>
+          </div>
+        </dl>
+      </section>
+    </main>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
