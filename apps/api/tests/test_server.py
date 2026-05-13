@@ -368,6 +368,16 @@ class HttpRouteTests(unittest.TestCase):
                 self.assertEqual(response.status, 202)
                 self.assertTrue(event_response["received"])
                 self.assertFalse(event_response["latestLocationUpdated"])
+                if payload["eventType"] == "box_opened":
+                    self.assertEqual(len(event_response["generatedAlerts"]), 1)
+                    self.assertEqual(
+                        event_response["generatedAlerts"][0]["alertType"],
+                        "box_opened",
+                    )
+                    self.assertEqual(
+                        event_response["generatedAlerts"][0]["severity"],
+                        "high",
+                    )
 
     def test_device_event_route_rejects_unknown_device(self) -> None:
         request = Request(
