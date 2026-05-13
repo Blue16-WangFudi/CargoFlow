@@ -34,12 +34,21 @@ docs/
   exec-plans/   Durable execution plans and architecture decisions
 scripts/
   start.sh      Starts the current local API and frontend
-  check.sh      Repository quality gate
+  check.sh      Repository quality gate, also used by CI
 ```
+
+## Prerequisites
+
+- Python 3.11 or newer
+- Node.js 20 or newer for local frontend JavaScript syntax checks
+- Bash
+
+No package manager install is required for the current skeleton. CI installs
+the Python and Node runtimes before running the same quality gate.
 
 ## Local Development Contract
 
-Start the current minimal API and frontend without installing dependencies:
+Start the current minimal API and frontend:
 
 ```bash
 scripts/start.sh
@@ -70,6 +79,11 @@ Run the local quality gate:
 scripts/check.sh
 ```
 
+The check script compiles Python modules, runs unit and HTTP smoke tests,
+verifies required product files, runs frontend DOM and API contract tests,
+checks JavaScript syntax when Node is available, verifies CI still invokes the
+same gate, and scans common conflict markers or accidental secrets.
+
 The first skeleton intentionally uses Python standard-library servers so a new
 contributor can verify the flow before FastAPI, React/Vite, PostgreSQL, Redis,
 and MQTT dependencies are introduced. Future product slices should replace the
@@ -81,10 +95,6 @@ startup and check commands.
 - `GET /health` returns service status and version metadata.
 - `GET /api/shipments/demo` returns a demo shipment snapshot for frontend and
   integration smoke checks.
-
-`scripts/check.sh` validates architecture references, Markdown links, script
-syntax, required skeleton files, Python unit and HTTP smoke tests, frontend
-asset wiring, conflict markers, and common accidental secret patterns.
 
 ## Task Source
 
