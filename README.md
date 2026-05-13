@@ -117,6 +117,14 @@ startup and check commands.
   capture time, and the active device-task binding are valid. Accepted GPS and
   box-open events can return `generatedAlerts` when the current alert rules
   create or merge route-deviation, abnormal-stop, or box-open alerts.
+- `GET /api/alerts`, `GET /api/alerts/{alertId}`,
+  `POST /api/alerts/{alertId}/process`,
+  `POST /api/alerts/{alertId}/close`, and
+  `POST /api/alerts/{alertId}/false-positive` provide the current development
+  alert handling contract. Scoped dispatchers and system admins can move open
+  alerts into processing, close them with a required reason, or mark them as
+  false positives; handler, close actor, timestamps, and reason are returned for
+  audit.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).

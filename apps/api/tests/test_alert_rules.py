@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from cargoflow_api.alert_rules import (
@@ -9,7 +10,7 @@ from cargoflow_api.alert_rules import (
     RoutePoint,
     TaskAlertContext,
 )
-from cargoflow_api.domain import AlertSeverity, AlertType, TransportTaskStatus
+from cargoflow_api.domain import AlertSeverity, AlertStatus, AlertType, TransportTaskStatus
 from cargoflow_api.location_ingest import DeviceEventType, LatestLocationSnapshot
 
 
@@ -122,6 +123,31 @@ class AlertRuleEngineTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0].alert_type, AlertType.BOX_OPENED)
         self.assertEqual(alerts[0].severity, AlertSeverity.HIGH)
+
+    def test_closed_alert_does_not_receive_future_merge_updates(self) -> None:
+        first = self.engine.evaluate_security_event(
+            self.context,
+            event_type=DeviceEventType.BOX_OPENED,
+            event_id="evt-box-1",
+            occurred_at=datetime(2026, 5, 13, 10, 8, tzinfo=UTC),
+        )[0]
+        self.store.save_alert(
+            replace(
+                first,
+                status=AlertStatus.CLOSED,
+                close_reason="Handled by dispatcher.",
+            )
+        )
+
+        second = self.engine.evaluate_security_event(
+            self.context,
+            event_type=DeviceEventType.BOX_OPENED,
+            event_id="evt-box-2",
+            occurred_at=datetime(2026, 5, 13, 10, 9, tzinfo=UTC),
+        )
+
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(second[0].id, first.id)
 
     def test_terminal_tasks_do_not_trigger_new_alerts(self) -> None:
         signed_context = TaskAlertContext(

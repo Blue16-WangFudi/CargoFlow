@@ -9,6 +9,8 @@ from urllib.request import Request, urlopen
 import cargoflow_api.server as server_module
 from cargoflow_api.server import (
     SERVICE_NAME,
+    alert_action_from_path,
+    alert_id_from_path,
     build_authorized_demo_shipment,
     build_demo_shipment,
     build_health_payload,
@@ -18,6 +20,8 @@ from cargoflow_api.server import (
     trajectory_shipment_id,
 )
 from cargoflow_api.access_control import Principal, Role
+from cargoflow_api.alert_handling import AlertHandlingStore
+from cargoflow_api.alert_rules import AlertRuleStore
 from cargoflow_api.cargo_binding import CargoBindingStore
 from cargoflow_api.location_ingest import DeviceEventStore
 from cargoflow_api.shipment_tracking import ShipmentTrackingStore
@@ -34,6 +38,12 @@ WAREHOUSE_AUTH_HEADERS = {
     "X-CargoFlow-Role": "warehouse_admin",
     "X-CargoFlow-Tenant-Id": "cgf-demo",
     "X-CargoFlow-Warehouse-Ids": "warehouse-shanghai",
+}
+DISPATCHER_AUTH_HEADERS = {
+    "X-CargoFlow-User-Id": "dispatcher-demo",
+    "X-CargoFlow-Role": "dispatcher",
+    "X-CargoFlow-Tenant-Id": "cgf-demo",
+    "X-CargoFlow-Dispatch-Region-Ids": "east-china",
 }
 
 
@@ -95,6 +105,16 @@ class PayloadTests(unittest.TestCase):
         )
         self.assertIsNone(trajectory_shipment_id("/api/shipments/CGF-DEMO-001/eta"))
 
+    def test_alert_route_parsers_extract_alert_id(self) -> None:
+        self.assertEqual(alert_id_from_path("/api/alerts/alert-demo"), "alert-demo")
+        self.assertEqual(alert_id_from_path("/api/alerts/alert%201"), "alert 1")
+        self.assertIsNone(alert_id_from_path("/api/alerts"))
+        self.assertEqual(
+            alert_action_from_path("/api/alerts/alert-demo/false-positive", "false-positive"),
+            "alert-demo",
+        )
+        self.assertIsNone(alert_action_from_path("/api/alerts/alert-demo", "close"))
+
 
 class HttpRouteTests(unittest.TestCase):
     @classmethod
@@ -112,7 +132,9 @@ class HttpRouteTests(unittest.TestCase):
         cls.thread.join(timeout=2)
 
     def setUp(self) -> None:
-        server_module.DEVICE_EVENTS = DeviceEventStore.demo()
+        server_module.ALERT_RULES = AlertRuleStore()
+        server_module.ALERT_HANDLING = AlertHandlingStore.demo(server_module.ALERT_RULES)
+        server_module.DEVICE_EVENTS = DeviceEventStore.demo(server_module.ALERT_RULES)
         server_module.VEHICLES = VehicleStore.demo()
         server_module.SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
         server_module.CARGO_BINDINGS = CargoBindingStore.demo()
@@ -382,6 +404,119 @@ class HttpRouteTests(unittest.TestCase):
                         event_response["generatedAlerts"][0]["severity"],
                         "high",
                     )
+
+    def test_alert_routes_process_close_and_filter_audited_status(self) -> None:
+        list_request = Request(
+            f"{self.base_url}/api/alerts?status=pending",
+            headers=DISPATCHER_AUTH_HEADERS,
+        )
+        with urlopen(list_request, timeout=3) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["alerts"][0]["alertId"], "alert-demo-box-001")
+
+        process_request = Request(
+            f"{self.base_url}/api/alerts/alert-demo-box-001/process",
+            data=b"{}",
+            headers={
+                **DISPATCHER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(process_request, timeout=3) as response:
+            processed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(processed["alert"]["status"], "processing")
+        self.assertEqual(processed["alert"]["handledByUserId"], "dispatcher-demo")
+        self.assertIn("handledAt", processed["alert"])
+
+        close_request = Request(
+            f"{self.base_url}/api/alerts/alert-demo-box-001/close",
+            data=json.dumps({"closeReason": "Driver confirmed cargo is secured."}).encode(
+                "utf-8"
+            ),
+            headers={
+                **DISPATCHER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(close_request, timeout=3) as response:
+            closed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(closed["alert"]["status"], "closed")
+        self.assertEqual(closed["alert"]["closedByUserId"], "dispatcher-demo")
+        self.assertEqual(
+            closed["alert"]["closeReason"],
+            "Driver confirmed cargo is secured.",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(close_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 409)
+        self.assertEqual(payload["error"], "alert_state_conflict")
+
+    def test_alert_routes_mark_false_positive_terminal_status(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/alerts/alert-demo-box-001/false-positive",
+            data=json.dumps({"reason": "Sensor health check showed a false open event."}).encode(
+                "utf-8"
+            ),
+            headers={
+                **DISPATCHER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["alert"]["status"], "false_positive")
+        self.assertEqual(
+            payload["alert"]["closeReason"],
+            "Sensor health check showed a false open event.",
+        )
+
+    def test_alert_routes_reject_unscoped_dispatcher_and_cargo_owner(self) -> None:
+        unscoped_request = Request(
+            f"{self.base_url}/api/alerts/alert-demo-box-001/process",
+            data=b"{}",
+            headers={
+                **DISPATCHER_AUTH_HEADERS,
+                "X-CargoFlow-Dispatch-Region-Ids": "north-china",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(unscoped_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "alert_access_denied")
+
+        owner_request = Request(
+            f"{self.base_url}/api/alerts",
+            headers=DEMO_AUTH_HEADERS,
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(owner_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "alert_access_denied")
 
     def test_device_event_route_rejects_unknown_device(self) -> None:
         request = Request(

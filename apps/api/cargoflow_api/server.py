@@ -23,6 +23,13 @@ from cargoflow_api.access_control import (
     parse_principal,
     require_shipment_access,
 )
+from cargoflow_api.alert_handling import (
+    AlertHandlingError,
+    AlertHandlingStore,
+    AlertScope,
+    alerts_to_wire,
+)
+from cargoflow_api.alert_rules import AlertRuleStore, alert_to_wire
 from cargoflow_api.cargo_binding import CargoBindingError, CargoBindingStore
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
@@ -46,7 +53,9 @@ DEMO_SHIPMENT_SCOPE = ShipmentScope(
     dispatch_region_ids=("east-china",),
 )
 SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
-DEVICE_EVENTS = DeviceEventStore.demo()
+ALERT_RULES = AlertRuleStore()
+ALERT_HANDLING = AlertHandlingStore.demo(ALERT_RULES)
+DEVICE_EVENTS = DeviceEventStore.demo(ALERT_RULES)
 ETA_SERVICE = EtaService()
 VEHICLES = VehicleStore.demo()
 CARGO_BINDINGS = CargoBindingStore.demo()
@@ -144,6 +153,20 @@ def vehicle_action_from_path(path: str, action: str) -> str | None:
     return None
 
 
+def alert_id_from_path(path: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 3 and parts[:2] == ["api", "alerts"]:
+        return parts[2]
+    return None
+
+
+def alert_action_from_path(path: str, action: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 4 and parts[:2] == ["api", "alerts"] and parts[3] == action:
+        return parts[2]
+    return None
+
+
 def shipment_action_id(path: str, action: str) -> str | None:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if len(parts) == 4 and parts[:2] == ["api", "shipments"]:
@@ -172,9 +195,16 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         if path == "/api/vehicles":
             self.send_vehicle_list()
             return
+        if path == "/api/alerts":
+            self.send_alert_list()
+            return
         vehicle_id = vehicle_id_from_path(path)
         if vehicle_id is not None:
             self.send_vehicle(vehicle_id)
+            return
+        alert_id = alert_id_from_path(path)
+        if alert_id is not None:
+            self.send_alert(alert_id)
             return
         shipment_id = latest_location_shipment_id(path)
         if shipment_id is not None:
@@ -206,6 +236,18 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/cargo-bindings":
             self.bind_cargo_vehicle()
+            return
+        alert_id = alert_action_from_path(path, "process")
+        if alert_id is not None:
+            self.process_alert(alert_id)
+            return
+        alert_id = alert_action_from_path(path, "close")
+        if alert_id is not None:
+            self.close_alert(alert_id)
+            return
+        alert_id = alert_action_from_path(path, "false-positive")
+        if alert_id is not None:
+            self.mark_alert_false_positive(alert_id)
             return
         vehicle_id = vehicle_action_from_path(path, "disable")
         if vehicle_id is not None:
@@ -357,6 +399,15 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                 device_events=DEVICE_EVENTS,
                 shipment_tracking=SHIPMENT_TRACKING,
             )
+            scope = SHIPMENT_TRACKING.scope_for(result.shipment_id)
+            ALERT_HANDLING.register_task_scope(
+                result.task.id,
+                AlertScope(
+                    tenant_id=scope.tenant_id,
+                    dispatch_region_ids=scope.dispatch_region_ids,
+                    warehouse_ids=scope.warehouse_ids,
+                ),
+            )
         except AccessControlError as exc:
             self.send_access_error(exc)
             return
@@ -376,6 +427,75 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             HTTPStatus.CREATED if result.created else HTTPStatus.OK,
             result.to_wire(),
         )
+
+    def send_alert_list(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            status_filter = self.query_param("status")
+            alerts = ALERT_HANDLING.list_alerts(principal, status=status_filter)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except AlertHandlingError as exc:
+            self.send_alert_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, alerts_to_wire(alerts))
+
+    def send_alert(self, alert_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            alert = ALERT_HANDLING.get_alert(alert_id, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except AlertHandlingError as exc:
+            self.send_alert_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"alert": alert_to_wire(alert)})
+
+    def process_alert(self, alert_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            alert = ALERT_HANDLING.start_processing(alert_id, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except AlertHandlingError as exc:
+            self.send_alert_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"alert": alert_to_wire(alert)})
+
+    def close_alert(self, alert_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            alert = ALERT_HANDLING.close_alert(alert_id, payload, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DeviceEventError as exc:
+            self.send_device_event_error(exc)
+            return
+        except AlertHandlingError as exc:
+            self.send_alert_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"alert": alert_to_wire(alert)})
+
+    def mark_alert_false_positive(self, alert_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            alert = ALERT_HANDLING.mark_false_positive(alert_id, payload, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DeviceEventError as exc:
+            self.send_device_event_error(exc)
+            return
+        except AlertHandlingError as exc:
+            self.send_alert_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, {"alert": alert_to_wire(alert)})
 
     def send_latest_shipment_location(self, shipment_id: str) -> None:
         try:
@@ -473,13 +593,7 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             payload = self.read_json_body()
             result = DEVICE_EVENTS.ingest(payload)
         except DeviceEventError as exc:
-            self.send_json(
-                HTTPStatus.BAD_REQUEST,
-                {
-                    "error": exc.error_code,
-                    "message": exc.message,
-                },
-            )
+            self.send_device_event_error(exc)
             return
         self.send_json(HTTPStatus.ACCEPTED, result.to_wire())
 
@@ -507,6 +621,9 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        self.send_device_event_error(exc)
+
+    def send_device_event_error(self, exc: DeviceEventError) -> None:
         self.send_json(
             HTTPStatus.BAD_REQUEST,
             {
@@ -514,6 +631,25 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                 "message": exc.message,
             },
         )
+
+    def send_alert_error(self, exc: AlertHandlingError) -> None:
+        self.send_json(
+            exc.status,
+            {
+                "error": exc.error_code,
+                "message": exc.message,
+            },
+        )
+
+    def query_param(self, name: str) -> str | None:
+        parsed = urlparse(self.path)
+        for pair in parsed.query.split("&"):
+            if not pair:
+                continue
+            raw_key, separator, raw_value = pair.partition("=")
+            if unquote(raw_key) == name:
+                return unquote(raw_value) if separator else ""
+        return None
 
     def read_json_body(self) -> dict[str, Any]:
         content_length = self.headers.get("Content-Length", "0").strip()

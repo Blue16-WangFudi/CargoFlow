@@ -202,7 +202,7 @@ class DeviceEventStore:
         self._lock = Lock()
 
     @classmethod
-    def demo(cls) -> "DeviceEventStore":
+    def demo(cls, alert_store: AlertRuleStore | None = None) -> "DeviceEventStore":
         store = cls(
             (
                 DeviceTaskBinding(
@@ -211,7 +211,7 @@ class DeviceEventStore:
                     vehicle_id="vehicle-demo-001",
                 ),
             ),
-            alert_engine=AlertRuleEngine(AlertRuleStore()),
+            alert_engine=AlertRuleEngine(alert_store or AlertRuleStore()),
             task_alert_contexts=(
                 TaskAlertContext(
                     task_id="task-demo-001",
