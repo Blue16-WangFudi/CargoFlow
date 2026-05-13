@@ -9,7 +9,15 @@ from typing import Any, Mapping
 
 from cargoflow_api.access_control import Principal, Role
 from cargoflow_api.alert_rules import AlertRuleStore, alert_to_wire
-from cargoflow_api.domain import Alert, AlertSeverity, AlertStatus, AlertType
+from cargoflow_api.domain import (
+    Alert,
+    AlertSeverity,
+    AlertStatus,
+    AlertType,
+    DispatchCommand,
+    DispatchCommandStatus,
+    DispatchTargetType,
+)
 
 
 class AlertHandlingError(Exception):
@@ -53,6 +61,28 @@ class AlertScope:
     warehouse_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class AlertNotificationRecord:
+    id: str
+    alert_id: str
+    channel: str
+    recipient_user_id: str
+    status: str
+    sent_at: datetime
+    template: str
+
+
+@dataclass(frozen=True, slots=True)
+class AlertLogFilters:
+    alert_type: AlertType | None = None
+    severity: AlertSeverity | None = None
+    status: AlertStatus | None = None
+    vehicle_id: str | None = None
+    cargo_id: str | None = None
+    triggered_from: datetime | None = None
+    triggered_to: datetime | None = None
+
+
 class AlertHandlingStore:
     """In-memory alert handling state until CargoFlow persistence is wired."""
 
@@ -61,9 +91,17 @@ class AlertHandlingStore:
         alert_store: AlertRuleStore,
         *,
         task_scopes: Mapping[str, AlertScope],
+        notifications: tuple[AlertNotificationRecord, ...] = (),
+        dispatch_commands: tuple[DispatchCommand, ...] = (),
     ) -> None:
         self.alert_store = alert_store
         self._task_scopes = dict(task_scopes)
+        self._notifications_by_alert: dict[str, list[AlertNotificationRecord]] = {}
+        self._commands_by_alert: dict[str, list[DispatchCommand]] = {}
+        for notification in notifications:
+            self.add_notification(notification)
+        for command in dispatch_commands:
+            self.add_dispatch_command(command)
 
     @classmethod
     def demo(cls, alert_store: AlertRuleStore | None = None) -> "AlertHandlingStore":
@@ -97,12 +135,50 @@ class AlertHandlingStore:
                     updated_at=triggered_at,
                 )
             )
-        return cls(store, task_scopes={"task-demo-001": demo_scope})
+        notification = AlertNotificationRecord(
+            id="notice-demo-box-001",
+            alert_id="alert-demo-box-001",
+            channel="in_app",
+            recipient_user_id="dispatcher-demo",
+            status="sent",
+            sent_at=_parse_datetime("2026-05-13T10:12:05+00:00"),
+            template="alert_high_priority",
+        )
+        command = DispatchCommand(
+            id="cmd-demo-box-001",
+            command_number="CMD-DEMO-BOX-001",
+            task_id="task-demo-001",
+            alert_id="alert-demo-box-001",
+            content="Inspect cargo seal and confirm box status.",
+            created_by_user_id="dispatcher-demo",
+            target_type=DispatchTargetType.DRIVER,
+            target_id="driver-demo",
+            status=DispatchCommandStatus.ACKNOWLEDGED,
+            issued_at=_parse_datetime("2026-05-13T10:13:00+00:00"),
+            delivered_at=_parse_datetime("2026-05-13T10:13:10+00:00"),
+            confirmed_at=_parse_datetime("2026-05-13T10:14:00+00:00"),
+        )
+        return cls(
+            store,
+            task_scopes={"task-demo-001": demo_scope},
+            notifications=(notification,),
+            dispatch_commands=(command,),
+        )
 
     def register_task_scope(self, task_id: str, scope: AlertScope) -> None:
         if not task_id.strip():
             raise AlertValidationError("taskId must be a non-empty string.")
         self._task_scopes[task_id] = scope
+
+    def add_notification(self, notification: AlertNotificationRecord) -> None:
+        self._notifications_by_alert.setdefault(notification.alert_id, []).append(
+            notification
+        )
+
+    def add_dispatch_command(self, command: DispatchCommand) -> None:
+        if command.alert_id is None:
+            return
+        self._commands_by_alert.setdefault(command.alert_id, []).append(command)
 
     def list_alerts(
         self,
@@ -124,6 +200,35 @@ class AlertHandlingStore:
         alert = self._alert_for(alert_id)
         self._require_alert_access(principal, alert)
         return alert
+
+    def query_alert_logs(
+        self,
+        principal: Principal,
+        filters: AlertLogFilters | None = None,
+    ) -> dict[str, Any]:
+        _require_alert_log_role(principal)
+        filters = filters or AlertLogFilters()
+        alerts = [
+            alert
+            for alert in self.alert_store.alerts()
+            if self._can_access(principal, alert)
+            and _matches_alert_filters(alert, filters)
+        ]
+        alerts.sort(key=lambda alert: alert.triggered_at, reverse=True)
+        return alert_logs_to_wire(alerts, self, filters)
+
+    def export_alert_logs(
+        self,
+        principal: Principal,
+        filters: AlertLogFilters | None = None,
+    ) -> dict[str, Any]:
+        payload = self.query_alert_logs(principal, filters)
+        payload["export"] = {
+            "format": "json",
+            "generatedAt": _utc_now().isoformat(),
+            "fileName": "cargoflow-alert-logs.json",
+        }
+        return payload
 
     def start_processing(
         self,
@@ -235,6 +340,22 @@ class AlertHandlingStore:
             scope.dispatch_region_ids,
         )
 
+    def _notification_records(self, alert_id: str) -> tuple[AlertNotificationRecord, ...]:
+        return tuple(
+            sorted(
+                self._notifications_by_alert.get(alert_id, ()),
+                key=lambda notification: notification.sent_at,
+            )
+        )
+
+    def _dispatch_commands(self, alert_id: str) -> tuple[DispatchCommand, ...]:
+        return tuple(
+            sorted(
+                self._commands_by_alert.get(alert_id, ()),
+                key=lambda command: command.issued_at,
+            )
+        )
+
 
 def alerts_to_wire(alerts: list[Alert]) -> dict[str, Any]:
     return {
@@ -243,10 +364,143 @@ def alerts_to_wire(alerts: list[Alert]) -> dict[str, Any]:
     }
 
 
+def alert_logs_to_wire(
+    alerts: list[Alert],
+    store: AlertHandlingStore,
+    filters: AlertLogFilters,
+) -> dict[str, Any]:
+    return {
+        "filters": _alert_log_filters_to_wire(filters),
+        "logs": [_alert_log_to_wire(alert, store) for alert in alerts],
+        "count": len(alerts),
+    }
+
+
+def alert_log_filters_from_query(params: Mapping[str, str]) -> AlertLogFilters:
+    return AlertLogFilters(
+        alert_type=_alert_type_from_wire(params["type"]) if "type" in params else None,
+        severity=(
+            _severity_from_wire(params["severity"]) if "severity" in params else None
+        ),
+        status=_status_from_wire(params["status"]) if "status" in params else None,
+        vehicle_id=_optional_text(params.get("vehicleId") or params.get("vehicle_id")),
+        cargo_id=_optional_text(params.get("cargoId") or params.get("cargo_id")),
+        triggered_from=(
+            _datetime_from_query(params["triggeredFrom"])
+            if "triggeredFrom" in params
+            else None
+        ),
+        triggered_to=(
+            _datetime_from_query(params["triggeredTo"])
+            if "triggeredTo" in params
+            else None
+        ),
+    )
+
+
+def _alert_log_to_wire(alert: Alert, store: AlertHandlingStore) -> dict[str, Any]:
+    payload = alert_to_wire(alert)
+    payload["notifications"] = [
+        _notification_to_wire(notification)
+        for notification in store._notification_records(alert.id)
+    ]
+    payload["dispatchCommands"] = [
+        _dispatch_command_to_wire(command) for command in store._dispatch_commands(alert.id)
+    ]
+    payload["chain"] = {
+        "notificationCount": len(payload["notifications"]),
+        "dispatchCommandCount": len(payload["dispatchCommands"]),
+        "hasClosedAudit": alert.closed_at is not None and alert.close_reason is not None,
+    }
+    return payload
+
+
+def _notification_to_wire(notification: AlertNotificationRecord) -> dict[str, Any]:
+    return {
+        "notificationId": notification.id,
+        "alertId": notification.alert_id,
+        "channel": notification.channel,
+        "recipientUserId": notification.recipient_user_id,
+        "status": notification.status,
+        "sentAt": notification.sent_at.isoformat(),
+        "template": notification.template,
+    }
+
+
+def _dispatch_command_to_wire(command: DispatchCommand) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "commandId": command.id,
+        "commandNumber": command.command_number,
+        "taskId": command.task_id,
+        "alertId": command.alert_id,
+        "content": command.content,
+        "createdByUserId": command.created_by_user_id,
+        "targetType": command.target_type.value,
+        "targetId": command.target_id,
+        "status": command.status.value,
+        "issuedAt": command.issued_at.isoformat(),
+    }
+    if command.delivered_at is not None:
+        payload["deliveredAt"] = command.delivered_at.isoformat()
+    if command.confirmed_at is not None:
+        payload["confirmedAt"] = command.confirmed_at.isoformat()
+    if command.failed_at is not None:
+        payload["failedAt"] = command.failed_at.isoformat()
+    if command.revoked_at is not None:
+        payload["revokedAt"] = command.revoked_at.isoformat()
+    if command.failure_reason is not None:
+        payload["failureReason"] = command.failure_reason
+    return payload
+
+
+def _alert_log_filters_to_wire(filters: AlertLogFilters) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if filters.alert_type is not None:
+        payload["type"] = filters.alert_type.value
+    if filters.severity is not None:
+        payload["severity"] = filters.severity.value
+    if filters.status is not None:
+        payload["status"] = filters.status.value
+    if filters.vehicle_id is not None:
+        payload["vehicleId"] = filters.vehicle_id
+    if filters.cargo_id is not None:
+        payload["cargoId"] = filters.cargo_id
+    if filters.triggered_from is not None:
+        payload["triggeredFrom"] = filters.triggered_from.isoformat()
+    if filters.triggered_to is not None:
+        payload["triggeredTo"] = filters.triggered_to.isoformat()
+    return payload
+
+
+def _matches_alert_filters(alert: Alert, filters: AlertLogFilters) -> bool:
+    if filters.alert_type is not None and alert.alert_type is not filters.alert_type:
+        return False
+    if filters.severity is not None and alert.severity is not filters.severity:
+        return False
+    if filters.status is not None and alert.status is not filters.status:
+        return False
+    if filters.vehicle_id is not None and alert.vehicle_id != filters.vehicle_id:
+        return False
+    if filters.cargo_id is not None and alert.cargo_id != filters.cargo_id:
+        return False
+    if filters.triggered_from is not None and alert.triggered_at < filters.triggered_from:
+        return False
+    if filters.triggered_to is not None and alert.triggered_at > filters.triggered_to:
+        return False
+    return True
+
+
 def _require_alert_handler_role(principal: Principal) -> None:
     if principal.role not in {Role.DISPATCHER, Role.SYSTEM_ADMIN}:
         raise AlertAuthorizationError(
             "Only dispatchers and system admins can handle alerts."
+        )
+
+
+def _require_alert_log_role(principal: Principal) -> None:
+    if principal.role is not Role.SYSTEM_ADMIN:
+        raise AlertAuthorizationError(
+            "Only system admins can query and export alert logs."
         )
 
 
@@ -266,6 +520,40 @@ def _status_from_wire(value: str) -> AlertStatus:
     except ValueError as exc:
         allowed = ", ".join(status.value for status in AlertStatus)
         raise AlertValidationError(f"status must be one of: {allowed}.") from exc
+
+
+def _alert_type_from_wire(value: str) -> AlertType:
+    normalized = value.strip().lower().replace("-", "_")
+    try:
+        return AlertType(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(alert_type.value for alert_type in AlertType)
+        raise AlertValidationError(f"type must be one of: {allowed}.") from exc
+
+
+def _severity_from_wire(value: str) -> AlertSeverity:
+    normalized = value.strip().lower().replace("-", "_")
+    try:
+        return AlertSeverity(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(severity.value for severity in AlertSeverity)
+        raise AlertValidationError(f"severity must be one of: {allowed}.") from exc
+
+
+def _datetime_from_query(value: str) -> datetime:
+    if not value.strip():
+        raise AlertValidationError("time filters must not be blank.")
+    try:
+        return _utc_now(datetime.fromisoformat(value.strip()))
+    except ValueError as exc:
+        raise AlertValidationError("time filters must use ISO 8601 format.") from exc
+
+
+def _optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _value(payload: Mapping[str, Any], name: str, default: Any = ...) -> Any:
