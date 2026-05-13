@@ -98,6 +98,28 @@ class LatestLocationSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class SecurityEventSnapshot:
+    task_id: str
+    vehicle_id: str
+    device_id: str
+    event_type: DeviceEventType
+    occurred_at: datetime
+    reported_at: datetime
+    event_id: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "taskId": self.task_id,
+            "vehicleId": self.vehicle_id,
+            "deviceId": self.device_id,
+            "eventType": self.event_type.value,
+            "occurredAt": self.occurred_at.isoformat(),
+            "reportedAt": self.reported_at.isoformat(),
+            "eventId": self.event_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DeviceEventResult:
     event_id: str
     event_type: DeviceEventType
@@ -129,7 +151,7 @@ class DeviceState:
     binding: DeviceTaskBinding
     online_status: VehicleOnlineStatus = VehicleOnlineStatus.OFFLINE
     last_heartbeat_at: datetime | None = None
-    security_events: list[dict[str, Any]] = field(default_factory=list)
+    security_events: list[SecurityEventSnapshot] = field(default_factory=list)
 
 
 class DeviceEventStore:
@@ -142,6 +164,8 @@ class DeviceEventStore:
             binding.device_id: DeviceState(binding=binding) for binding in bindings
         }
         self._latest_by_task: dict[str, LatestLocationSnapshot] = {}
+        self._locations_by_task: dict[str, list[LatestLocationSnapshot]] = {}
+        self._security_events_by_task: dict[str, list[SecurityEventSnapshot]] = {}
         self._seen_events: set[str] = set()
         self._lock = Lock()
 
@@ -199,13 +223,18 @@ class DeviceEventStore:
                 return event.accepted_without_location()
 
             if event.event_type in {DeviceEventType.BOX_OPENED, DeviceEventType.BOX_CLOSED}:
-                state.security_events.append(
-                    {
-                        "eventId": event.event_id,
-                        "eventType": event.event_type.value,
-                        "occurredAt": event.occurred_at.isoformat(),
-                        "reportedAt": event.reported_at.isoformat(),
-                    }
+                snapshot = SecurityEventSnapshot(
+                    task_id=event.task_id,
+                    vehicle_id=state.binding.vehicle_id,
+                    device_id=event.device_id,
+                    event_type=event.event_type,
+                    occurred_at=event.occurred_at,
+                    reported_at=event.reported_at,
+                    event_id=event.event_id,
+                )
+                state.security_events.append(snapshot)
+                self._security_events_by_task.setdefault(event.task_id, []).append(
+                    snapshot
                 )
                 return event.accepted_without_location()
 
@@ -214,6 +243,16 @@ class DeviceEventStore:
     def latest_location(self, task_id: str) -> LatestLocationSnapshot | None:
         with self._lock:
             return self._latest_by_task.get(task_id)
+
+    def trajectory_points(self, task_id: str) -> tuple[LatestLocationSnapshot, ...]:
+        with self._lock:
+            points = self._locations_by_task.get(task_id, ())
+            return tuple(sorted(points, key=lambda point: point.captured_at))
+
+    def security_events(self, task_id: str) -> tuple[SecurityEventSnapshot, ...]:
+        with self._lock:
+            events = self._security_events_by_task.get(task_id, ())
+            return tuple(sorted(events, key=lambda event: event.occurred_at))
 
     def _state_for(self, device_id: str) -> DeviceState:
         try:
@@ -254,6 +293,7 @@ class DeviceEventStore:
         )
         snapshot = LatestLocationSnapshot.from_point(point)
         self._latest_by_task[event.task_id] = snapshot
+        self._locations_by_task.setdefault(event.task_id, []).append(snapshot)
         return DeviceEventResult(
             event_id=event.event_id,
             event_type=event.event_type,

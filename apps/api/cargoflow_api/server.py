@@ -124,6 +124,10 @@ def eta_shipment_id(path: str) -> str | None:
     return shipment_action_id(path, "eta")
 
 
+def trajectory_shipment_id(path: str) -> str | None:
+    return shipment_action_id(path, "trajectory")
+
+
 def vehicle_id_from_path(path: str) -> str | None:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if len(parts) == 3 and parts[:2] == ["api", "vehicles"]:
@@ -177,6 +181,10 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         shipment_id = eta_shipment_id(path)
         if shipment_id is not None:
             self.send_shipment_eta(shipment_id)
+            return
+        shipment_id = trajectory_shipment_id(path)
+        if shipment_id is not None:
+            self.send_shipment_trajectory(shipment_id)
             return
         self.send_json(
             HTTPStatus.NOT_FOUND,
@@ -371,6 +379,36 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                 principal,
                 DEVICE_EVENTS,
                 ETA_SERVICE,
+            )
+        except AccessControlError as exc:
+            status = HTTPStatus(exc.status_code)
+            self.send_json(
+                status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+                authenticate=status is HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        except ShipmentTrackingError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
+    def send_shipment_trajectory(self, shipment_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = SHIPMENT_TRACKING.trajectory_payload(
+                shipment_id,
+                principal,
+                DEVICE_EVENTS,
             )
         except AccessControlError as exc:
             status = HTTPStatus(exc.status_code)
