@@ -18,5 +18,10 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Run API unit tests
+        run: |
+          export PYTHONPATH="$PWD/apps/api:$PWD"
+          python -m unittest discover -s apps/api/tests -p 'test_*.py'
+
       - name: Run repository checks
         run: scripts/check.sh
