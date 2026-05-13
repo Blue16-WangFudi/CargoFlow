@@ -4,12 +4,10 @@ This repository is the working record for CargoFlow, a smart logistics product. 
 
 ## Start Here
 
-- Product source: [docs/智慧物流_PRD需求文档.md](docs/智慧物流_PRD需求文档.md)
+- Tech architecture: [docs/exec-plans/2026-05-13-tech-architecture-constraints.md](docs/exec-plans/2026-05-13-tech-architecture-constraints.md)
 - Design constraints: [DESIGN.md](DESIGN.md)
-- Original feature list: [02_智慧物流_基本功能清单（可选,杜邦线）.md](02_智慧物流_基本功能清单（可选,杜邦线）.md)
-- Task management rules: [docs/task-management.md](docs/task-management.md)
 - Execution plans: [docs/exec-plans/](docs/exec-plans/)
-- Agent practice notes: [docs/articles/README.md](docs/articles/README.md)
+- Knowledge scope: [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md)
 
 ## Task System
 
@@ -26,7 +24,7 @@ Do not rely on chat history as the task source. Create or update task records wh
 
 ## Task Claiming Rule
 
-When starting implementation work from the task table, create a git worktree under `../CargoFlow-worktrees` and always base each new worktree on the latest remote `develop` branch. Select one task from the table that is not already in an active or terminal state such as `In Progress`, `Done`, `进行中`, `待验收`, or `已完成`, then claim it and begin work. After completing the task, submit a PR and ensure the CI pipeline passes.
+When starting implementation work from the task table, create a git worktree under `../CargoFlow-worktrees` and always base each new worktree on the latest remote `main` branch. Select one task from the table that is not already in an active or terminal state such as `In Progress`, `Done`, `进行中`, `待验收`, or `已完成`, then claim it and begin work. After completing the task, submit a PR and ensure the CI pipeline passes.
 
 If there is no selectable task, or all available tasks are waiting on prerequisites, first check whether any task can be moved to `待领取` and then retry task selection. If no task can be made claimable, do not execute implementation work.
 

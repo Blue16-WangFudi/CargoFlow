@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
-from threading import Lock
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -99,7 +99,7 @@ class ShipmentTrackingStore:
     ) -> None:
         self._records = {record.shipment_id: record for record in records}
         self._aliases = aliases or {}
-        self._lock = Lock()
+        self._lock = RLock()
 
     @classmethod
     def demo(cls) -> "ShipmentTrackingStore":

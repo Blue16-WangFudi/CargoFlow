@@ -1618,6 +1618,14 @@ class HttpRouteTests(unittest.TestCase):
         self.assertEqual(error.code, 403)
         self.assertEqual(payload["error"], "cargo_binding_access_denied")
 
+    def test_unknown_route_returns_json_404(self) -> None:
+        with self.assertRaises(HTTPError) as context:
+            urlopen(f"{self.base_url}/missing", timeout=3)
+
+        self.assertEqual(context.exception.code, 404)
+        payload = json.loads(context.exception.read().decode("utf-8"))
+        self.assertEqual(payload["error"], "not_found")
+
 
 if __name__ == "__main__":
     unittest.main()
