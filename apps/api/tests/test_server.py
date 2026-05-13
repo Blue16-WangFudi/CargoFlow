@@ -503,6 +503,32 @@ class HttpRouteTests(unittest.TestCase):
         self.assertEqual(error.code, 409)
         self.assertEqual(payload["error"], "vehicle_conflict")
 
+    def test_vehicle_routes_reject_duplicate_vehicle_id(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/vehicles",
+            data=json.dumps(
+                {
+                    "vehicleId": "vehicle-demo-001",
+                    "vehicleNumber": "VH-HTTP-003",
+                    "plateNumber": "SH-C99999",
+                    "deviceId": "gps-http-003",
+                }
+            ).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 409)
+        self.assertEqual(payload["error"], "vehicle_conflict")
+
     def test_vehicle_routes_reject_cargo_owner(self) -> None:
         request = Request(
             f"{self.base_url}/api/vehicles",
