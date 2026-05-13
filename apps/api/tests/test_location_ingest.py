@@ -59,6 +59,10 @@ class DeviceEventStoreTests(unittest.TestCase):
         assert latest is not None
         self.assertEqual(latest.event_id, "evt-gps-1")
         self.assertEqual(latest.captured_at, datetime(2026, 5, 13, 10, tzinfo=UTC))
+        self.assertEqual(
+            [point.event_id for point in self.store.trajectory_points("task-1")],
+            ["evt-gps-1"],
+        )
 
     def test_heartbeat_and_box_events_are_received_without_location_update(self) -> None:
         heartbeat = self.store.ingest(
@@ -83,6 +87,10 @@ class DeviceEventStoreTests(unittest.TestCase):
         self.assertFalse(heartbeat.latest_location_updated)
         self.assertFalse(box_opened.latest_location_updated)
         self.assertIsNone(self.store.latest_location("task-1"))
+        security_events = self.store.security_events("task-1")
+        self.assertEqual(len(security_events), 1)
+        self.assertEqual(security_events[0].event_id, "evt-box-1")
+        self.assertEqual(security_events[0].vehicle_id, "vehicle-1")
 
     def test_invalid_coordinates_do_not_overwrite_latest_location(self) -> None:
         self.store.ingest(device_event("evt-gps-1"))

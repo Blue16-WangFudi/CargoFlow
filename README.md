@@ -51,6 +51,7 @@ Default URLs:
 - Demo shipment API: http://127.0.0.1:8000/api/shipments/demo
 - Demo latest location API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/latest-location
 - Demo ETA API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/eta
+- Demo trajectory replay API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/trajectory
 - Frontend console: http://127.0.0.1:5173
 
 Ports can be changed with environment variables:
@@ -95,6 +96,10 @@ startup and check commands.
   current location or destination data is missing. The current development
   implementation uses the offline straight-line `EtaService` described in the
   architecture constraints.
+- `GET /api/shipments/{shipmentId}/trajectory` returns replay-ready route
+  points ordered by event time, including accepted GPS points, planned start
+  and destination, alert points, and driver status report nodes. Key nodes are
+  preserved and the current development response is not simplified.
 - `GET /api/vehicles`, `GET /api/vehicles/{vehicleId}`,
   `POST /api/vehicles`, `PATCH /api/vehicles/{vehicleId}`,
   `POST /api/vehicles/{vehicleId}/disable`, and

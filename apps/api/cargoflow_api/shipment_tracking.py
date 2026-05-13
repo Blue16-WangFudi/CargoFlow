@@ -8,9 +8,18 @@ from http import HTTPStatus
 from typing import Any
 
 from cargoflow_api.access_control import Principal, ShipmentScope, require_shipment_access
-from cargoflow_api.domain import TransportTaskStatus
+from cargoflow_api.domain import (
+    AlertSeverity,
+    AlertType,
+    StatusReportState,
+    TransportTaskStatus,
+)
 from cargoflow_api.eta import Destination, EtaService
-from cargoflow_api.location_ingest import DeviceEventStore, LatestLocationSnapshot
+from cargoflow_api.location_ingest import (
+    DeviceEventStore,
+    LatestLocationSnapshot,
+    SecurityEventSnapshot,
+)
 
 
 class ShipmentTrackingError(Exception):
@@ -54,6 +63,9 @@ class ShipmentTrackingRecord:
     transport_status: TransportTaskStatus
     vehicle: VehicleSummary
     destination: Destination | None = None
+    planned_start: Destination | None = None
+    alert_points: tuple["TrajectoryAlertPoint", ...] = ()
+    status_reports: tuple["TrajectoryStatusReportPoint", ...] = ()
 
     @property
     def scope(self) -> ShipmentScope:
@@ -103,6 +115,30 @@ class ShipmentTrackingStore:
                 name="Shanghai Waigaoqiao Logistics Park",
                 longitude=121.5956,
                 latitude=31.3479,
+            ),
+            planned_start=Destination(
+                name="Shanghai Pudong Warehouse",
+                longitude=121.4737,
+                latitude=31.2304,
+            ),
+            alert_points=(
+                TrajectoryAlertPoint(
+                    alert_id="alert-demo-box-001",
+                    alert_type=AlertType.BOX_OPENED,
+                    severity=AlertSeverity.HIGH,
+                    status="pending",
+                    longitude=121.52,
+                    latitude=31.26,
+                    triggered_at=datetime(2026, 5, 13, 10, 12, tzinfo=UTC),
+                ),
+            ),
+            status_reports=(
+                TrajectoryStatusReportPoint(
+                    report_id="report-demo-loaded",
+                    report_status=StatusReportState.LOADED,
+                    reporter_user_id="driver-demo",
+                    reported_at=datetime(2026, 5, 13, 9, 55, tzinfo=UTC),
+                ),
             ),
         )
         return cls((record,), aliases={"demo": record.shipment_id})
@@ -165,6 +201,45 @@ class ShipmentTrackingStore:
             },
         }
 
+    def trajectory_payload(
+        self,
+        shipment_id: str,
+        principal: Principal,
+        device_events: DeviceEventStore,
+    ) -> dict[str, Any]:
+        record = self._record_for(shipment_id)
+        require_shipment_access(principal, record.scope)
+
+        location_points = device_events.trajectory_points(record.task_id)
+        security_events = device_events.security_events(record.task_id)
+        trajectory_points = _merge_trajectory_points(
+            record,
+            location_points,
+            security_events,
+        )
+        return {
+            "shipmentId": record.shipment_id,
+            "cargoId": record.cargo_id,
+            "taskId": record.task_id,
+            "tenantId": record.tenant_id,
+            "transportStatus": record.transport_status.value,
+            "vehicle": record.vehicle.to_wire(),
+            "trajectory": trajectory_points,
+            "summary": {
+                "pointCount": len(trajectory_points),
+                "gpsPointCount": len(location_points),
+                "alertPointCount": len(record.alert_points) + len(security_events),
+                "statusReportCount": len(record.status_reports),
+                "hasStartPoint": record.planned_start is not None,
+                "hasEndPoint": record.destination is not None,
+                "isSimplified": False,
+            },
+            "access": {
+                "role": principal.role.value,
+                "principalId": principal.user_id,
+            },
+        }
+
     def _record_for(self, shipment_id: str) -> ShipmentTrackingRecord:
         normalized = self._aliases.get(shipment_id, shipment_id)
         try:
@@ -221,6 +296,141 @@ def _latest_location_to_wire(
         "updatedAt": latest.reported_at.isoformat(),
         "eventId": latest.event_id,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectoryAlertPoint:
+    alert_id: str
+    alert_type: AlertType
+    severity: AlertSeverity
+    status: str
+    longitude: float
+    latitude: float
+    triggered_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.alert_id.strip():
+            raise ValueError("alert_id must not be blank")
+        if not -180 <= self.longitude <= 180:
+            raise ValueError("alert longitude must be between -180 and 180")
+        if not -90 <= self.latitude <= 90:
+            raise ValueError("alert latitude must be between -90 and 90")
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "kind": "alert",
+            "alertId": self.alert_id,
+            "alertType": self.alert_type.value,
+            "severity": self.severity.value,
+            "status": self.status,
+            "longitude": self.longitude,
+            "latitude": self.latitude,
+            "occurredAt": _as_utc(self.triggered_at).isoformat(),
+            "isKeyNode": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectoryStatusReportPoint:
+    report_id: str
+    report_status: StatusReportState
+    reporter_user_id: str
+    reported_at: datetime
+    note: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.report_id.strip():
+            raise ValueError("report_id must not be blank")
+        if not self.reporter_user_id.strip():
+            raise ValueError("reporter_user_id must not be blank")
+
+    def to_wire(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "kind": "status_report",
+            "reportId": self.report_id,
+            "reportStatus": self.report_status.value,
+            "reporterUserId": self.reporter_user_id,
+            "occurredAt": _as_utc(self.reported_at).isoformat(),
+            "isKeyNode": True,
+        }
+        if self.note:
+            payload["note"] = self.note
+        return payload
+
+
+def _merge_trajectory_points(
+    record: ShipmentTrackingRecord,
+    location_points: tuple[LatestLocationSnapshot, ...],
+    security_events: tuple[SecurityEventSnapshot, ...],
+) -> list[dict[str, Any]]:
+    points: list[dict[str, Any]] = []
+    if record.planned_start is not None:
+        points.append(_endpoint_to_wire("start", record.planned_start))
+
+    for point in location_points:
+        points.append(_trajectory_location_to_wire(point))
+    for alert in record.alert_points:
+        points.append(alert.to_wire())
+    for event in security_events:
+        points.append(_security_event_to_alert_wire(event))
+    for report in record.status_reports:
+        points.append(report.to_wire())
+
+    if record.destination is not None:
+        points.append(_endpoint_to_wire("end", record.destination))
+
+    points.sort(key=_trajectory_sort_key)
+    return points
+
+
+def _trajectory_location_to_wire(point: LatestLocationSnapshot) -> dict[str, Any]:
+    return {
+        "kind": "gps",
+        "eventId": point.event_id,
+        "vehicleId": point.vehicle_id,
+        "deviceId": point.device_id,
+        "longitude": point.longitude,
+        "latitude": point.latitude,
+        "occurredAt": point.captured_at.isoformat(),
+        "reportedAt": point.reported_at.isoformat(),
+        "isKeyNode": False,
+    }
+
+
+def _security_event_to_alert_wire(event: SecurityEventSnapshot) -> dict[str, Any]:
+    return {
+        "kind": "alert",
+        "alertId": event.event_id,
+        "alertType": event.event_type.value,
+        "severity": "high" if event.event_type.value == "box_opened" else "low",
+        "status": "detected",
+        "vehicleId": event.vehicle_id,
+        "deviceId": event.device_id,
+        "occurredAt": event.occurred_at.isoformat(),
+        "reportedAt": event.reported_at.isoformat(),
+        "isKeyNode": True,
+    }
+
+
+def _endpoint_to_wire(
+    kind: str,
+    endpoint: Destination,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "name": endpoint.name,
+        "longitude": endpoint.longitude,
+        "latitude": endpoint.latitude,
+        "isKeyNode": True,
+    }
+
+
+def _trajectory_sort_key(point: dict[str, Any]) -> tuple[int, str, str]:
+    if point["kind"] == "start":
+        return (0, "", point["kind"])
+    if point["kind"] == "end":
+        return (2, "", point["kind"])
+    return (1, str(point.get("occurredAt") or ""), point["kind"])
 
 
 def _as_utc(value: datetime) -> datetime:

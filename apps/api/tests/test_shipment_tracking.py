@@ -4,13 +4,14 @@ import unittest
 from datetime import UTC, datetime
 
 from cargoflow_api.access_control import AuthorizationError, Principal, Role
-from cargoflow_api.domain import TransportTaskStatus
+from cargoflow_api.domain import StatusReportState, TransportTaskStatus
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventStore, DeviceTaskBinding
 from cargoflow_api.shipment_tracking import (
     ShipmentTrackingError,
     ShipmentTrackingRecord,
     ShipmentTrackingStore,
+    TrajectoryStatusReportPoint,
     VehicleSummary,
 )
 
@@ -166,6 +167,101 @@ class ShipmentTrackingStoreTests(unittest.TestCase):
         self.assertEqual(eta["status"], "unavailable")
         self.assertEqual(eta["reason"], "missing_destination")
         self.assertIsNone(eta["destination"])
+
+    def test_trajectory_payload_returns_ordered_replay_points_and_key_nodes(self) -> None:
+        device_events = DeviceEventStore.demo()
+        device_events.ingest(
+            {
+                "eventId": "evt-demo-gps-2",
+                "eventType": "gps",
+                "deviceId": "gps-demo-001",
+                "taskId": "task-demo-001",
+                "occurredAt": "2026-05-13T10:08:00+00:00",
+                "reportedAt": "2026-05-13T10:08:03+00:00",
+                "schemaVersion": 1,
+                "longitude": 121.5,
+                "latitude": 31.24,
+            }
+        )
+        device_events.ingest(
+            {
+                "eventId": "evt-demo-box-opened",
+                "eventType": "box_opened",
+                "deviceId": "gps-demo-001",
+                "taskId": "task-demo-001",
+                "occurredAt": "2026-05-13T10:09:00+00:00",
+                "reportedAt": "2026-05-13T10:09:02+00:00",
+                "schemaVersion": 1,
+            }
+        )
+
+        payload = self.tracking.trajectory_payload(
+            "CGF-DEMO-001",
+            self.principal,
+            device_events,
+        )
+
+        kinds = [point["kind"] for point in payload["trajectory"]]
+        self.assertEqual(kinds[0], "start")
+        self.assertEqual(kinds[-1], "end")
+        self.assertLess(kinds.index("status_report"), kinds.index("gps"))
+        self.assertEqual(kinds.count("gps"), 2)
+        self.assertGreaterEqual(kinds.count("alert"), 2)
+        self.assertEqual(payload["summary"]["gpsPointCount"], 2)
+        self.assertEqual(payload["summary"]["statusReportCount"], 1)
+        self.assertTrue(payload["summary"]["hasStartPoint"])
+        self.assertTrue(payload["summary"]["hasEndPoint"])
+        self.assertFalse(payload["summary"]["isSimplified"])
+        key_nodes = [point for point in payload["trajectory"] if point["isKeyNode"]]
+        self.assertIn("alert-demo-box-001", {point.get("alertId") for point in key_nodes})
+        self.assertIn("evt-demo-box-opened", {point.get("alertId") for point in key_nodes})
+
+    def test_trajectory_payload_preserves_status_report_without_gps_points(self) -> None:
+        record = ShipmentTrackingRecord(
+            shipment_id="CGF-STATUS-ONLY",
+            cargo_id="cargo-status-only",
+            task_id="task-status-only",
+            tenant_id="cgf-demo",
+            owner_user_id="owner-acme",
+            driver_user_id="driver-demo",
+            warehouse_ids=("warehouse-shanghai",),
+            dispatch_region_ids=("east-china",),
+            transport_status=TransportTaskStatus.LOADED,
+            vehicle=VehicleSummary(
+                vehicle_id="vehicle-status-only",
+                vehicle_number="VH-STATUS-ONLY",
+                plate_number="CF-2027",
+                device_id="gps-status-only",
+                driver_user_id="driver-demo",
+            ),
+            status_reports=(
+                TrajectoryStatusReportPoint(
+                    report_id="report-loaded",
+                    report_status=StatusReportState.LOADED,
+                    reporter_user_id="driver-demo",
+                    reported_at=datetime(2026, 5, 13, 9, 55, tzinfo=UTC),
+                ),
+            ),
+        )
+        tracking = ShipmentTrackingStore((record,))
+        device_events = DeviceEventStore(
+            (
+                DeviceTaskBinding(
+                    device_id="gps-status-only",
+                    task_id="task-status-only",
+                    vehicle_id="vehicle-status-only",
+                ),
+            )
+        )
+
+        payload = tracking.trajectory_payload(
+            "CGF-STATUS-ONLY",
+            self.principal,
+            device_events,
+        )
+
+        self.assertEqual(payload["summary"]["gpsPointCount"], 0)
+        self.assertEqual(payload["trajectory"][0]["kind"], "status_report")
 
 
 if __name__ == "__main__":

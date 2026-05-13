@@ -15,6 +15,7 @@ from cargoflow_api.server import (
     create_server,
     eta_shipment_id,
     latest_location_shipment_id,
+    trajectory_shipment_id,
 )
 from cargoflow_api.access_control import Principal, Role
 from cargoflow_api.location_ingest import DeviceEventStore
@@ -80,6 +81,17 @@ class PayloadTests(unittest.TestCase):
             "CGF DEMO",
         )
         self.assertIsNone(eta_shipment_id("/api/shipments/CGF-DEMO-001/latest-location"))
+
+    def test_trajectory_route_parser_extracts_shipment_id(self) -> None:
+        self.assertEqual(
+            trajectory_shipment_id("/api/shipments/CGF-DEMO-001/trajectory"),
+            "CGF-DEMO-001",
+        )
+        self.assertEqual(
+            trajectory_shipment_id("/api/shipments/CGF%20DEMO/trajectory"),
+            "CGF DEMO",
+        )
+        self.assertIsNone(trajectory_shipment_id("/api/shipments/CGF-DEMO-001/eta"))
 
 
 class HttpRouteTests(unittest.TestCase):
@@ -207,6 +219,47 @@ class HttpRouteTests(unittest.TestCase):
         }
         request = Request(
             f"{self.base_url}/api/shipments/CGF-DEMO-001/eta",
+            headers=headers,
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "forbidden")
+
+    def test_trajectory_route_returns_replay_points_and_key_nodes(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/trajectory",
+            headers=DEMO_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["shipmentId"], "CGF-DEMO-001")
+        self.assertEqual(payload["vehicle"]["deviceId"], "gps-demo-001")
+        self.assertGreaterEqual(payload["summary"]["pointCount"], 5)
+        self.assertEqual(payload["summary"]["gpsPointCount"], 1)
+        self.assertTrue(payload["summary"]["hasStartPoint"])
+        self.assertTrue(payload["summary"]["hasEndPoint"])
+        kinds = [point["kind"] for point in payload["trajectory"]]
+        self.assertEqual(kinds[0], "start")
+        self.assertEqual(kinds[-1], "end")
+        self.assertIn("gps", kinds)
+        self.assertIn("alert", kinds)
+        self.assertIn("status_report", kinds)
+
+    def test_trajectory_route_rejects_forbidden_owner(self) -> None:
+        headers = {
+            **DEMO_AUTH_HEADERS,
+            "X-CargoFlow-User-Id": "owner-other",
+        }
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/trajectory",
             headers=headers,
         )
 
