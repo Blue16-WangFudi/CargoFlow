@@ -126,6 +126,10 @@ startup and check commands.
   alerts into processing, close them with a required reason, or mark them as
   false positives; handler, close actor, timestamps, and reason are returned for
   audit.
+- `GET /api/alert-logs` and `GET /api/alert-logs/export` provide the current
+  system-admin alert log contract. The endpoints support `type`, `severity`,
+  `status`, `vehicleId`, `cargoId`, `triggeredFrom`, and `triggeredTo` filters
+  and return each alert's notification and dispatch-command chain.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).

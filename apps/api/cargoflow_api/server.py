@@ -27,6 +27,7 @@ from cargoflow_api.alert_handling import (
     AlertHandlingError,
     AlertHandlingStore,
     AlertScope,
+    alert_log_filters_from_query,
     alerts_to_wire,
 )
 from cargoflow_api.alert_rules import AlertRuleStore, alert_to_wire
@@ -197,6 +198,12 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/alerts":
             self.send_alert_list()
+            return
+        if path == "/api/alert-logs":
+            self.send_alert_logs(export=False)
+            return
+        if path == "/api/alert-logs/export":
+            self.send_alert_logs(export=True)
             return
         vehicle_id = vehicle_id_from_path(path)
         if vehicle_id is not None:
@@ -441,6 +448,22 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.OK, alerts_to_wire(alerts))
 
+    def send_alert_logs(self, *, export: bool) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            filters = alert_log_filters_from_query(self.query_params())
+            if export:
+                payload = ALERT_HANDLING.export_alert_logs(principal, filters)
+            else:
+                payload = ALERT_HANDLING.query_alert_logs(principal, filters)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except AlertHandlingError as exc:
+            self.send_alert_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
     def send_alert(self, alert_id: str) -> None:
         try:
             principal = parse_principal(self.headers)
@@ -642,14 +665,17 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         )
 
     def query_param(self, name: str) -> str | None:
+        return self.query_params().get(name)
+
+    def query_params(self) -> dict[str, str]:
         parsed = urlparse(self.path)
+        params: dict[str, str] = {}
         for pair in parsed.query.split("&"):
             if not pair:
                 continue
             raw_key, separator, raw_value = pair.partition("=")
-            if unquote(raw_key) == name:
-                return unquote(raw_value) if separator else ""
-        return None
+            params[unquote(raw_key)] = unquote(raw_value) if separator else ""
+        return params
 
     def read_json_body(self) -> dict[str, Any]:
         content_length = self.headers.get("Content-Length", "0").strip()

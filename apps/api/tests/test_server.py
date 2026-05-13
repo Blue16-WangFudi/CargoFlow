@@ -45,6 +45,11 @@ DISPATCHER_AUTH_HEADERS = {
     "X-CargoFlow-Tenant-Id": "cgf-demo",
     "X-CargoFlow-Dispatch-Region-Ids": "east-china",
 }
+SYSTEM_ADMIN_AUTH_HEADERS = {
+    "X-CargoFlow-User-Id": "admin-demo",
+    "X-CargoFlow-Role": "system_admin",
+    "X-CargoFlow-Tenant-Id": "cgf-demo",
+}
 
 
 class PayloadTests(unittest.TestCase):
@@ -512,6 +517,62 @@ class HttpRouteTests(unittest.TestCase):
         )
         with self.assertRaises(HTTPError) as context:
             urlopen(owner_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "alert_access_denied")
+
+    def test_alert_log_route_filters_and_returns_chain_for_system_admin(self) -> None:
+        request = Request(
+            (
+                f"{self.base_url}/api/alert-logs"
+                "?type=box_opened&severity=high&status=pending"
+                "&vehicleId=vehicle-demo-001&cargoId=cargo-demo-001"
+                "&triggeredFrom=2026-05-13T10:00:00%2B00:00"
+                "&triggeredTo=2026-05-13T10:30:00%2B00:00"
+            ),
+            headers=SYSTEM_ADMIN_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["filters"]["type"], "box_opened")
+        log = payload["logs"][0]
+        self.assertEqual(log["alertId"], "alert-demo-box-001")
+        self.assertEqual(log["notifications"][0]["status"], "sent")
+        self.assertEqual(
+            log["dispatchCommands"][0]["status"],
+            "acknowledged",
+        )
+        self.assertEqual(log["chain"]["notificationCount"], 1)
+        self.assertEqual(log["chain"]["dispatchCommandCount"], 1)
+
+    def test_alert_log_export_route_returns_json_export_payload(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/alert-logs/export?status=pending",
+            headers=SYSTEM_ADMIN_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["export"]["format"], "json")
+        self.assertEqual(payload["export"]["fileName"], "cargoflow-alert-logs.json")
+        self.assertEqual(payload["count"], 1)
+
+    def test_alert_log_route_rejects_dispatcher(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/alert-logs",
+            headers=DISPATCHER_AUTH_HEADERS,
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
 
         error = context.exception
         payload = json.loads(error.read().decode("utf-8"))
