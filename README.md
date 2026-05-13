@@ -95,6 +95,12 @@ startup and check commands.
   current location or destination data is missing. The current development
   implementation uses the offline straight-line `EtaService` described in the
   architecture constraints.
+- `GET /api/vehicles`, `GET /api/vehicles/{vehicleId}`,
+  `POST /api/vehicles`, `PATCH /api/vehicles/{vehicleId}`,
+  `POST /api/vehicles/{vehicleId}/disable`, and
+  `POST /api/vehicles/{vehicleId}/unbind` provide the current development
+  vehicle management contract. Warehouse admins and system admins can maintain
+  vehicles; vehicle number, plate number, and device ID uniqueness is enforced.
 - `POST /api/device-events` accepts the current development contract for
   device GPS, heartbeat, and box-open/box-close events. Payloads must include
   `eventId`, `eventType`, `deviceId`, `taskId`, `occurredAt`, `reportedAt`, and

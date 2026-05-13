@@ -18,12 +18,19 @@ from cargoflow_api.server import (
 )
 from cargoflow_api.access_control import Principal, Role
 from cargoflow_api.location_ingest import DeviceEventStore
+from cargoflow_api.vehicle_management import VehicleStore
 
 
 DEMO_AUTH_HEADERS = {
     "X-CargoFlow-User-Id": "owner-acme",
     "X-CargoFlow-Role": "cargo_owner",
     "X-CargoFlow-Tenant-Id": "cgf-demo",
+}
+WAREHOUSE_AUTH_HEADERS = {
+    "X-CargoFlow-User-Id": "warehouse-admin",
+    "X-CargoFlow-Role": "warehouse_admin",
+    "X-CargoFlow-Tenant-Id": "cgf-demo",
+    "X-CargoFlow-Warehouse-Ids": "warehouse-shanghai",
 }
 
 
@@ -92,6 +99,7 @@ class HttpRouteTests(unittest.TestCase):
 
     def setUp(self) -> None:
         server_module.DEVICE_EVENTS = DeviceEventStore.demo()
+        server_module.VEHICLES = VehicleStore.demo()
 
     def test_health_route(self) -> None:
         with urlopen(f"{self.base_url}/health", timeout=3) as response:
@@ -335,6 +343,126 @@ class HttpRouteTests(unittest.TestCase):
         payload = json.loads(error.read().decode("utf-8"))
         self.assertEqual(error.code, 400)
         self.assertEqual(payload["error"], "invalid_device_event")
+
+    def test_vehicle_routes_create_list_update_disable_and_unbind(self) -> None:
+        create_request = Request(
+            f"{self.base_url}/api/vehicles",
+            data=json.dumps(
+                {
+                    "vehicleId": "vehicle-http-001",
+                    "vehicleNumber": "VH-HTTP-001",
+                    "plateNumber": "SH-C12345",
+                    "deviceId": "gps-http-001",
+                    "driverUserId": "driver-http",
+                }
+            ).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with urlopen(create_request, timeout=3) as response:
+            created = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(created["vehicle"]["vehicleId"], "vehicle-http-001")
+        self.assertEqual(created["vehicle"]["bindingStatus"], "available")
+
+        list_request = Request(
+            f"{self.base_url}/api/vehicles",
+            headers=WAREHOUSE_AUTH_HEADERS,
+        )
+        with urlopen(list_request, timeout=3) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(listed["count"], 2)
+
+        patch_request = Request(
+            f"{self.base_url}/api/vehicles/vehicle-http-001",
+            data=json.dumps({"plateNumber": "SH-C54321"}).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="PATCH",
+        )
+        with urlopen(patch_request, timeout=3) as response:
+            updated = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(updated["vehicle"]["plateNumber"], "SH-C54321")
+
+        unbind_request = Request(
+            f"{self.base_url}/api/vehicles/vehicle-demo-001/unbind",
+            data=json.dumps({"reason": "completed"}).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(unbind_request, timeout=3) as response:
+            unbound = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(unbound["vehicle"]["bindingStatus"], "available")
+        self.assertIsNone(unbound["vehicle"]["driverUserId"])
+
+        disable_request = Request(
+            f"{self.base_url}/api/vehicles/vehicle-http-001/disable",
+            data=json.dumps({"reason": "maintenance"}).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(disable_request, timeout=3) as response:
+            disabled = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(disabled["vehicle"]["bindingStatus"], "disabled")
+        self.assertEqual(disabled["vehicle"]["onlineStatus"], "offline")
+
+    def test_vehicle_routes_reject_duplicate_unique_keys(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/vehicles",
+            data=json.dumps(
+                {
+                    "vehicleId": "vehicle-http-duplicate",
+                    "vehicleNumber": "VH-HTTP-002",
+                    "plateNumber": "CF-2026",
+                    "deviceId": "gps-http-002",
+                }
+            ).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 409)
+        self.assertEqual(payload["error"], "vehicle_conflict")
+
+    def test_vehicle_routes_reject_cargo_owner(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/vehicles",
+            headers=DEMO_AUTH_HEADERS,
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "vehicle_access_denied")
 
 
 if __name__ == "__main__":
