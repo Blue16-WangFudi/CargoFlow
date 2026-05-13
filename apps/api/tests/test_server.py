@@ -13,6 +13,7 @@ from cargoflow_api.server import (
     build_demo_shipment,
     build_health_payload,
     create_server,
+    eta_shipment_id,
     latest_location_shipment_id,
 )
 from cargoflow_api.access_control import Principal, Role
@@ -61,6 +62,17 @@ class PayloadTests(unittest.TestCase):
             "CGF DEMO",
         )
         self.assertIsNone(latest_location_shipment_id("/api/shipments/demo"))
+
+    def test_eta_route_parser_extracts_shipment_id(self) -> None:
+        self.assertEqual(
+            eta_shipment_id("/api/shipments/CGF-DEMO-001/eta"),
+            "CGF-DEMO-001",
+        )
+        self.assertEqual(
+            eta_shipment_id("/api/shipments/CGF%20DEMO/eta"),
+            "CGF DEMO",
+        )
+        self.assertIsNone(eta_shipment_id("/api/shipments/CGF-DEMO-001/latest-location"))
 
 
 class HttpRouteTests(unittest.TestCase):
@@ -148,6 +160,45 @@ class HttpRouteTests(unittest.TestCase):
         }
         request = Request(
             f"{self.base_url}/api/shipments/CGF-DEMO-001/latest-location",
+            headers=headers,
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "forbidden")
+
+    def test_eta_route_returns_remaining_distance_and_arrival(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/eta",
+            headers=DEMO_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["shipmentId"], "CGF-DEMO-001")
+        self.assertEqual(payload["transportStatus"], "in_transit")
+        self.assertEqual(payload["eta"]["status"], "available")
+        self.assertEqual(payload["eta"]["remainingDistanceKm"], 17.46)
+        self.assertEqual(payload["eta"]["updatedAt"], "2026-05-13T10:00:03+00:00")
+        self.assertEqual(
+            payload["eta"]["destination"]["name"],
+            "Shanghai Waigaoqiao Logistics Park",
+        )
+        self.assertIsNotNone(payload["eta"]["estimatedArrival"])
+
+    def test_eta_route_rejects_forbidden_owner(self) -> None:
+        headers = {
+            **DEMO_AUTH_HEADERS,
+            "X-CargoFlow-User-Id": "owner-other",
+        }
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/eta",
             headers=headers,
         )
 

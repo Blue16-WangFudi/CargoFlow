@@ -4,8 +4,15 @@ import unittest
 from datetime import UTC, datetime
 
 from cargoflow_api.access_control import AuthorizationError, Principal, Role
+from cargoflow_api.domain import TransportTaskStatus
+from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventStore, DeviceTaskBinding
-from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
+from cargoflow_api.shipment_tracking import (
+    ShipmentTrackingError,
+    ShipmentTrackingRecord,
+    ShipmentTrackingStore,
+    VehicleSummary,
+)
 
 
 class ShipmentTrackingStoreTests(unittest.TestCase):
@@ -81,6 +88,84 @@ class ShipmentTrackingStoreTests(unittest.TestCase):
             )
 
         self.assertEqual(context.exception.error_code, "shipment_not_found")
+
+    def test_eta_payload_returns_available_estimate_for_in_transit_task(self) -> None:
+        payload = self.tracking.eta_payload(
+            "CGF-DEMO-001",
+            self.principal,
+            DeviceEventStore.demo(),
+            EtaService(average_speed_kph=60),
+            now=datetime(2026, 5, 13, 10, 5, tzinfo=UTC),
+        )
+
+        eta = payload["eta"]
+        self.assertEqual(payload["transportStatus"], "in_transit")
+        self.assertEqual(eta["status"], "available")
+        self.assertEqual(eta["updatedAt"], "2026-05-13T10:00:03+00:00")
+        self.assertEqual(eta["calculatedAt"], "2026-05-13T10:05:00+00:00")
+        self.assertEqual(eta["estimatedArrival"], "2026-05-13T10:22:28+00:00")
+        self.assertEqual(eta["remainingDistanceKm"], 17.46)
+        self.assertEqual(eta["destination"]["name"], "Shanghai Waigaoqiao Logistics Park")
+
+    def test_eta_payload_reports_unavailable_when_location_is_missing(self) -> None:
+        device_events = DeviceEventStore(
+            (
+                DeviceTaskBinding(
+                    device_id="gps-demo-001",
+                    task_id="task-demo-001",
+                    vehicle_id="vehicle-demo-001",
+                ),
+            )
+        )
+
+        payload = self.tracking.eta_payload(
+            "CGF-DEMO-001",
+            self.principal,
+            device_events,
+            EtaService(),
+            now=datetime(2026, 5, 13, 10, 5, tzinfo=UTC),
+        )
+
+        eta = payload["eta"]
+        self.assertEqual(eta["status"], "unavailable")
+        self.assertEqual(eta["reason"], "missing_location")
+        self.assertIsNone(eta["estimatedArrival"])
+        self.assertIsNone(eta["remainingDistanceKm"])
+        self.assertEqual(eta["destination"]["name"], "Shanghai Waigaoqiao Logistics Park")
+
+    def test_eta_payload_reports_unavailable_when_destination_is_missing(self) -> None:
+        record = ShipmentTrackingRecord(
+            shipment_id="CGF-NO-DEST",
+            cargo_id="cargo-no-dest",
+            task_id="task-demo-001",
+            tenant_id="cgf-demo",
+            owner_user_id="owner-acme",
+            driver_user_id="driver-demo",
+            warehouse_ids=("warehouse-shanghai",),
+            dispatch_region_ids=("east-china",),
+            transport_status=TransportTaskStatus.IN_TRANSIT,
+            vehicle=VehicleSummary(
+                vehicle_id="vehicle-demo-001",
+                vehicle_number="VH-DEMO-001",
+                plate_number="CF-2026",
+                device_id="gps-demo-001",
+                driver_user_id="driver-demo",
+            ),
+        )
+        tracking = ShipmentTrackingStore((record,))
+
+        payload = tracking.eta_payload(
+            "CGF-NO-DEST",
+            self.principal,
+            DeviceEventStore.demo(),
+            EtaService(),
+            now=datetime(2026, 5, 13, 10, 5, tzinfo=UTC),
+        )
+
+        eta = payload["eta"]
+        self.assertEqual(eta["status"], "unavailable")
+        self.assertEqual(eta["reason"], "missing_destination")
+        self.assertIsNone(eta["destination"])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from typing import Any
 
 from cargoflow_api.access_control import Principal, ShipmentScope, require_shipment_access
 from cargoflow_api.domain import TransportTaskStatus
+from cargoflow_api.eta import Destination, EtaService
 from cargoflow_api.location_ingest import DeviceEventStore, LatestLocationSnapshot
 
 
@@ -52,6 +53,7 @@ class ShipmentTrackingRecord:
     dispatch_region_ids: tuple[str, ...]
     transport_status: TransportTaskStatus
     vehicle: VehicleSummary
+    destination: Destination | None = None
 
     @property
     def scope(self) -> ShipmentScope:
@@ -97,6 +99,11 @@ class ShipmentTrackingStore:
                 device_id="gps-demo-001",
                 driver_user_id="driver-demo",
             ),
+            destination=Destination(
+                name="Shanghai Waigaoqiao Logistics Park",
+                longitude=121.5956,
+                latitude=31.3479,
+            ),
         )
         return cls((record,), aliases={"demo": record.shipment_id})
 
@@ -125,6 +132,33 @@ class ShipmentTrackingStore:
             "vehicle": record.vehicle.to_wire(),
             "latestLocation": _latest_location_to_wire(latest),
             "delayHint": self._delay_hint(latest, checked_at),
+            "access": {
+                "role": principal.role.value,
+                "principalId": principal.user_id,
+            },
+        }
+
+    def eta_payload(
+        self,
+        shipment_id: str,
+        principal: Principal,
+        device_events: DeviceEventStore,
+        eta_service: EtaService,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        record = self._record_for(shipment_id)
+        require_shipment_access(principal, record.scope)
+
+        latest = device_events.latest_location(record.task_id)
+        eta = eta_service.estimate(latest, record.destination, calculated_at=now)
+        return {
+            "shipmentId": record.shipment_id,
+            "cargoId": record.cargo_id,
+            "taskId": record.task_id,
+            "tenantId": record.tenant_id,
+            "transportStatus": record.transport_status.value,
+            "eta": eta.to_wire(),
             "access": {
                 "role": principal.role.value,
                 "principalId": principal.user_id,
