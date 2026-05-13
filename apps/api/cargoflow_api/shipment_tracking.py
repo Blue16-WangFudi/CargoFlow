@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
+from threading import Lock
 from typing import Any
 
 from cargoflow_api.access_control import Principal, ShipmentScope, require_shipment_access
@@ -91,6 +92,7 @@ class ShipmentTrackingStore:
     ) -> None:
         self._records = {record.shipment_id: record for record in records}
         self._aliases = aliases or {}
+        self._lock = Lock()
 
     @classmethod
     def demo(cls) -> "ShipmentTrackingStore":
@@ -145,6 +147,18 @@ class ShipmentTrackingStore:
 
     def scope_for(self, shipment_id: str) -> ShipmentScope:
         return self._record_for(shipment_id).scope
+
+    def upsert_record(
+        self,
+        record: ShipmentTrackingRecord,
+        *,
+        aliases: tuple[str, ...] = (),
+    ) -> None:
+        with self._lock:
+            self._records[record.shipment_id] = record
+            for alias in aliases:
+                if alias:
+                    self._aliases[alias] = record.shipment_id
 
     def latest_location_payload(
         self,
@@ -241,15 +255,16 @@ class ShipmentTrackingStore:
         }
 
     def _record_for(self, shipment_id: str) -> ShipmentTrackingRecord:
-        normalized = self._aliases.get(shipment_id, shipment_id)
-        try:
-            return self._records[normalized]
-        except KeyError as exc:
-            raise ShipmentTrackingError(
-                "shipment_not_found",
-                f"No bound shipment found for {shipment_id}",
-                HTTPStatus.NOT_FOUND,
-            ) from exc
+        with self._lock:
+            normalized = self._aliases.get(shipment_id, shipment_id)
+            try:
+                return self._records[normalized]
+            except KeyError as exc:
+                raise ShipmentTrackingError(
+                    "shipment_not_found",
+                    f"No bound shipment found for {shipment_id}",
+                    HTTPStatus.NOT_FOUND,
+                ) from exc
 
     def _delay_hint(
         self,

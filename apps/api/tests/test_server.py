@@ -18,7 +18,9 @@ from cargoflow_api.server import (
     trajectory_shipment_id,
 )
 from cargoflow_api.access_control import Principal, Role
+from cargoflow_api.cargo_binding import CargoBindingStore
 from cargoflow_api.location_ingest import DeviceEventStore
+from cargoflow_api.shipment_tracking import ShipmentTrackingStore
 from cargoflow_api.vehicle_management import VehicleStore
 
 
@@ -112,6 +114,8 @@ class HttpRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         server_module.DEVICE_EVENTS = DeviceEventStore.demo()
         server_module.VEHICLES = VehicleStore.demo()
+        server_module.SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
+        server_module.CARGO_BINDINGS = CargoBindingStore.demo()
 
     def test_health_route(self) -> None:
         with urlopen(f"{self.base_url}/health", timeout=3) as response:
@@ -552,6 +556,114 @@ class HttpRouteTests(unittest.TestCase):
         payload = json.loads(error.read().decode("utf-8"))
         self.assertEqual(error.code, 403)
         self.assertEqual(payload["error"], "vehicle_access_denied")
+
+    def test_cargo_binding_route_creates_task_and_tracking_link(self) -> None:
+        create_vehicle_request = Request(
+            f"{self.base_url}/api/vehicles",
+            data=json.dumps(
+                {
+                    "vehicleId": "vehicle-bind-http-001",
+                    "vehicleNumber": "VH-BIND-HTTP-001",
+                    "plateNumber": "SH-BIND-HTTP",
+                    "deviceId": "gps-bind-http-001",
+                    "driverUserId": "driver-http",
+                }
+            ).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(create_vehicle_request, timeout=3) as response:
+            self.assertEqual(response.status, 201)
+
+        bind_request = Request(
+            f"{self.base_url}/api/cargo-bindings",
+            data=json.dumps(
+                {
+                    "cargoId": "cargo-pending-001",
+                    "vehicleId": "vehicle-bind-http-001",
+                }
+            ).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(bind_request, timeout=3) as response:
+            binding = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        task_id = binding["binding"]["taskId"]
+        self.assertEqual(binding["binding"]["shipmentId"], "CGF-PENDING-001")
+        self.assertEqual(
+            binding["binding"]["vehicle"]["bindingStatus"],
+            "bound",
+        )
+
+        event_request = Request(
+            f"{self.base_url}/api/device-events",
+            data=json.dumps(
+                {
+                    "eventId": "evt-http-bound-cargo",
+                    "eventType": "gps",
+                    "deviceId": "gps-bind-http-001",
+                    "taskId": task_id,
+                    "occurredAt": "2026-05-13T10:10:00+00:00",
+                    "reportedAt": "2026-05-13T10:10:02+00:00",
+                    "schemaVersion": 1,
+                    "longitude": 121.2,
+                    "latitude": 31.2,
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(event_request, timeout=3) as response:
+            event = json.loads(response.read().decode("utf-8"))
+
+        self.assertTrue(event["latestLocationUpdated"])
+        latest_request = Request(
+            f"{self.base_url}/api/shipments/CGF-PENDING-001/latest-location",
+            headers={
+                "X-CargoFlow-User-Id": "owner-beta",
+                "X-CargoFlow-Role": "cargo_owner",
+                "X-CargoFlow-Tenant-Id": "cgf-demo",
+            },
+        )
+        with urlopen(latest_request, timeout=3) as response:
+            latest = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(latest["cargoId"], "cargo-pending-001")
+        self.assertEqual(latest["latestLocation"]["eventId"], "evt-http-bound-cargo")
+        self.assertEqual(latest["vehicle"]["deviceId"], "gps-bind-http-001")
+
+    def test_cargo_binding_route_rejects_cargo_owner(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/cargo-bindings",
+            data=json.dumps(
+                {
+                    "cargoId": "cargo-pending-001",
+                    "vehicleId": "vehicle-demo-001",
+                }
+            ).encode("utf-8"),
+            headers={
+                **DEMO_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "cargo_binding_access_denied")
 
 
 if __name__ == "__main__":

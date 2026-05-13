@@ -106,6 +106,10 @@ startup and check commands.
   `POST /api/vehicles/{vehicleId}/unbind` provide the current development
   vehicle management contract. Warehouse admins and system admins can maintain
   vehicles; vehicle number, plate number, and device ID uniqueness is enforced.
+- `POST /api/cargo-bindings` lets a scoped warehouse admin or system admin bind
+  cargo to an available vehicle. The binding creates or updates the active
+  transport task, marks the vehicle as bound, registers the device-task binding,
+  and makes later device locations visible through the shipment tracking APIs.
 - `POST /api/device-events` accepts the current development contract for
   device GPS, heartbeat, and box-open/box-close events. Payloads must include
   `eventId`, `eventType`, `deviceId`, `taskId`, `occurredAt`, `reportedAt`, and

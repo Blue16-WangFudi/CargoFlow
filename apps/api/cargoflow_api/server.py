@@ -23,6 +23,7 @@ from cargoflow_api.access_control import (
     parse_principal,
     require_shipment_access,
 )
+from cargoflow_api.cargo_binding import CargoBindingError, CargoBindingStore
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
 from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
@@ -48,6 +49,7 @@ SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
 DEVICE_EVENTS = DeviceEventStore.demo()
 ETA_SERVICE = EtaService()
 VEHICLES = VehicleStore.demo()
+CARGO_BINDINGS = CargoBindingStore.demo()
 
 
 def utc_now_iso() -> str:
@@ -202,6 +204,9 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         if path == "/api/vehicles":
             self.create_vehicle()
             return
+        if path == "/api/cargo-bindings":
+            self.bind_cargo_vehicle()
+            return
         vehicle_id = vehicle_action_from_path(path, "disable")
         if vehicle_id is not None:
             self.disable_vehicle(vehicle_id)
@@ -340,6 +345,37 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             self.send_vehicle_error(exc)
             return
         self.send_json(HTTPStatus.OK, {"vehicle": vehicle_to_wire(vehicle)})
+
+    def bind_cargo_vehicle(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            result = CARGO_BINDINGS.bind_cargo_to_vehicle(
+                payload,
+                principal,
+                vehicles=VEHICLES,
+                device_events=DEVICE_EVENTS,
+                shipment_tracking=SHIPMENT_TRACKING,
+            )
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except (DeviceEventError, VehicleManagementError) as exc:
+            self.send_vehicle_error(exc)
+            return
+        except CargoBindingError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(
+            HTTPStatus.CREATED if result.created else HTTPStatus.OK,
+            result.to_wire(),
+        )
 
     def send_latest_shipment_location(self, shipment_id: str) -> None:
         try:

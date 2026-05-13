@@ -297,6 +297,27 @@ class DeviceEventStore:
 
             return self._ingest_gps(event, state.binding)
 
+    def bind_device_to_task(self, binding: DeviceTaskBinding) -> None:
+        with self._lock:
+            state = self._states.get(binding.device_id)
+            if state is None:
+                self._states[binding.device_id] = DeviceState(binding=binding)
+                return
+            state.binding = binding
+
+    def unbind_device(self, device_id: str, *, task_id: str | None = None) -> None:
+        with self._lock:
+            state = self._states.get(device_id)
+            if state is None:
+                return
+            if task_id is not None and state.binding.task_id != task_id:
+                return
+            self._states.pop(device_id, None)
+
+    def clear_latest_location(self, task_id: str) -> None:
+        with self._lock:
+            self._latest_by_task.pop(task_id, None)
+
     def latest_location(self, task_id: str) -> LatestLocationSnapshot | None:
         with self._lock:
             return self._latest_by_task.get(task_id)

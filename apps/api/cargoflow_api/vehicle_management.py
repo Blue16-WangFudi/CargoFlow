@@ -146,6 +146,29 @@ class VehicleStore:
             self._vehicles[vehicle_id] = updated
             return updated
 
+    def bind_vehicle(
+        self,
+        vehicle_id: str,
+        principal: Principal,
+        *,
+        driver_user_id: str,
+    ) -> Vehicle:
+        require_vehicle_manager(principal)
+        if not driver_user_id.strip():
+            raise VehicleValidationError("driverUserId must be a non-empty string.")
+        with self._lock:
+            current = self._vehicle_for_locked(vehicle_id)
+            if current.binding_status is VehicleBindingStatus.DISABLED:
+                raise VehicleValidationError("Disabled vehicles cannot be bound.")
+            updated = replace(
+                current,
+                binding_status=VehicleBindingStatus.BOUND,
+                driver_user_id=driver_user_id.strip(),
+                updated_at=utc_now(),
+            )
+            self._vehicles[vehicle_id] = updated
+            return updated
+
     def unbind_vehicle(
         self,
         vehicle_id: str,
