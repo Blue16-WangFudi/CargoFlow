@@ -22,8 +22,10 @@ from cargoflow_api.access_control import (
     parse_principal,
     require_shipment_access,
 )
+from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
 
 SERVICE_NAME = "cargoflow-api"
+MAX_JSON_BODY_BYTES = 32 * 1024
 
 
 DEMO_SHIPMENT_SCOPE = ShipmentScope(
@@ -34,6 +36,7 @@ DEMO_SHIPMENT_SCOPE = ShipmentScope(
     warehouse_ids=("warehouse-shanghai",),
     dispatch_region_ids=("east-china",),
 )
+DEVICE_EVENTS = DeviceEventStore.demo()
 
 
 def utc_now_iso() -> str:
@@ -50,6 +53,22 @@ def build_health_payload() -> dict[str, Any]:
 
 
 def build_demo_shipment() -> dict[str, Any]:
+    latest_location = DEVICE_EVENTS.latest_location("task-demo-001")
+    if latest_location is None:
+        latest_location_payload = {
+            "longitude": 121.4737,
+            "latitude": 31.2304,
+            "recordedAt": "2026-05-13T10:00:00+00:00",
+        }
+    else:
+        latest_location_payload = {
+            "longitude": latest_location.longitude,
+            "latitude": latest_location.latitude,
+            "recordedAt": latest_location.captured_at.isoformat(),
+            "reportedAt": latest_location.reported_at.isoformat(),
+            "eventId": latest_location.event_id,
+        }
+
     return {
         "shipmentId": "CGF-DEMO-001",
         "tenantId": DEMO_SHIPMENT_SCOPE.tenant_id,
@@ -63,11 +82,7 @@ def build_demo_shipment() -> dict[str, Any]:
             "deviceId": "gps-demo-001",
             "driver": "Demo Driver",
         },
-        "latestLocation": {
-            "longitude": 121.4737,
-            "latitude": 31.2304,
-            "recordedAt": "2026-05-13T10:00:00+00:00",
-        },
+        "latestLocation": latest_location_payload,
         "eta": {
             "destination": "Shanghai Waigaoqiao Logistics Park",
             "estimatedArrival": "2026-05-13T14:30:00+00:00",
@@ -112,6 +127,19 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        path = urlparse(self.path).path
+        if path == "/api/device-events":
+            self.receive_device_event()
+            return
+        self.send_json(
+            HTTPStatus.NOT_FOUND,
+            {
+                "error": "not_found",
+                "message": f"No CargoFlow route for {path}",
+            },
+        )
+
     def send_guarded_demo_shipment(self) -> None:
         try:
             principal = parse_principal(self.headers)
@@ -128,6 +156,40 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             )
             return
         self.send_json(HTTPStatus.OK, payload)
+
+    def receive_device_event(self) -> None:
+        try:
+            payload = self.read_json_body()
+            result = DEVICE_EVENTS.ingest(payload)
+        except DeviceEventError as exc:
+            self.send_json(
+                HTTPStatus.BAD_REQUEST,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(HTTPStatus.ACCEPTED, result.to_wire())
+
+    def read_json_body(self) -> dict[str, Any]:
+        content_length = self.headers.get("Content-Length", "0").strip()
+        try:
+            body_size = int(content_length)
+        except ValueError as exc:
+            raise DeviceEventError("Content-Length must be an integer") from exc
+        if body_size <= 0:
+            raise DeviceEventError("Request body must not be empty")
+        if body_size > MAX_JSON_BODY_BYTES:
+            raise DeviceEventError("Request body is too large")
+        raw_body = self.rfile.read(body_size)
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DeviceEventError("Request body must be a JSON object") from exc
+        if not isinstance(payload, dict):
+            raise DeviceEventError("Request body must be a JSON object")
+        return payload
 
     def log_message(self, format: str, *args: Any) -> None:
         timestamp = utc_now_iso()
@@ -158,7 +220,7 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
             (

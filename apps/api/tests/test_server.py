@@ -6,6 +6,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import cargoflow_api.server as server_module
 from cargoflow_api.server import (
     SERVICE_NAME,
     build_authorized_demo_shipment,
@@ -14,6 +15,7 @@ from cargoflow_api.server import (
     create_server,
 )
 from cargoflow_api.access_control import Principal, Role
+from cargoflow_api.location_ingest import DeviceEventStore
 
 
 DEMO_AUTH_HEADERS = {
@@ -63,6 +65,9 @@ class HttpRouteTests(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join(timeout=2)
+
+    def setUp(self) -> None:
+        server_module.DEVICE_EVENTS = DeviceEventStore.demo()
 
     def test_health_route(self) -> None:
         with urlopen(f"{self.base_url}/health", timeout=3) as response:
@@ -125,6 +130,106 @@ class HttpRouteTests(unittest.TestCase):
         self.assertEqual(response.status, 204)
         self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
         self.assertIn("X-CargoFlow-User-Id", headers["Access-Control-Allow-Headers"])
+        self.assertIn("POST", headers["Access-Control-Allow-Methods"])
+
+    def test_device_event_route_accepts_gps_and_updates_demo_location(self) -> None:
+        payload = {
+            "eventId": "evt-http-gps-1",
+            "eventType": "gps",
+            "deviceId": "gps-demo-001",
+            "taskId": "task-demo-001",
+            "occurredAt": "2026-05-13T10:05:00+00:00",
+            "reportedAt": "2026-05-13T10:05:02+00:00",
+            "schemaVersion": 1,
+            "longitude": 121.5,
+            "latitude": 31.2,
+            "speedKph": 60,
+            "headingDegrees": 90,
+        }
+        request = Request(
+            f"{self.base_url}/api/device-events",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            event_response = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 202)
+        self.assertTrue(event_response["latestLocationUpdated"])
+        shipment_request = Request(
+            f"{self.base_url}/api/shipments/demo",
+            headers=DEMO_AUTH_HEADERS,
+        )
+        with urlopen(shipment_request, timeout=3) as response:
+            shipment = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(shipment["latestLocation"]["eventId"], "evt-http-gps-1")
+        self.assertEqual(shipment["latestLocation"]["longitude"], 121.5)
+
+    def test_device_event_route_accepts_heartbeat_and_box_events(self) -> None:
+        for payload in (
+            {
+                "eventId": "evt-http-heartbeat-1",
+                "eventType": "heartbeat",
+                "deviceId": "gps-demo-001",
+                "taskId": "task-demo-001",
+                "occurredAt": "2026-05-13T10:05:00+00:00",
+                "reportedAt": "2026-05-13T10:05:01+00:00",
+                "schemaVersion": 1,
+            },
+            {
+                "eventId": "evt-http-box-1",
+                "eventType": "box_opened",
+                "deviceId": "gps-demo-001",
+                "taskId": "task-demo-001",
+                "occurredAt": "2026-05-13T10:06:00+00:00",
+                "reportedAt": "2026-05-13T10:06:02+00:00",
+                "schemaVersion": 1,
+            },
+        ):
+            with self.subTest(event_type=payload["eventType"]):
+                request = Request(
+                    f"{self.base_url}/api/device-events",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+
+                with urlopen(request, timeout=3) as response:
+                    event_response = json.loads(response.read().decode("utf-8"))
+
+                self.assertEqual(response.status, 202)
+                self.assertTrue(event_response["received"])
+                self.assertFalse(event_response["latestLocationUpdated"])
+
+    def test_device_event_route_rejects_unknown_device(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/device-events",
+            data=json.dumps(
+                {
+                    "eventId": "evt-http-gps-1",
+                    "eventType": "gps",
+                    "deviceId": "gps-other",
+                    "taskId": "task-demo-001",
+                    "occurredAt": "2026-05-13T10:05:00+00:00",
+                    "reportedAt": "2026-05-13T10:05:02+00:00",
+                    "schemaVersion": 1,
+                    "longitude": 121.5,
+                    "latitude": 31.2,
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 400)
+        self.assertEqual(payload["error"], "invalid_device_event")
 
 
 if __name__ == "__main__":
