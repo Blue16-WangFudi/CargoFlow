@@ -85,6 +85,13 @@ startup and check commands.
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).
 
+## Core Domain Contracts
+
+The initial domain model lives in `apps/api/cargoflow_api/domain/` and covers
+cargo, vehicles, transport tasks, location points, alerts, dispatch commands,
+driver status reports, and Q&A records. The matching PostgreSQL persistence
+contract is the Alembic revision under `apps/api/migrations/versions/`.
+
 `scripts/check.sh` validates architecture references, Markdown links, script
 syntax, required skeleton files, Python unit and HTTP smoke tests, frontend
 asset wiring, conflict markers, and common accidental secret patterns.
