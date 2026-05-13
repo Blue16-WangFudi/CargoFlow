@@ -570,6 +570,7 @@ class HttpRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status, 201)
         self.assertEqual(created["vehicle"]["vehicleId"], "vehicle-http-001")
+        self.assertEqual(created["vehicle"]["warehouseId"], "warehouse-shanghai")
         self.assertEqual(created["vehicle"]["bindingStatus"], "available")
 
         list_request = Request(
@@ -625,6 +626,40 @@ class HttpRouteTests(unittest.TestCase):
 
         self.assertEqual(disabled["vehicle"]["bindingStatus"], "disabled")
         self.assertEqual(disabled["vehicle"]["onlineStatus"], "offline")
+
+    def test_vehicle_routes_filter_and_reject_out_of_scope_warehouse(self) -> None:
+        other_warehouse_headers = {
+            **WAREHOUSE_AUTH_HEADERS,
+            "X-CargoFlow-User-Id": "warehouse-other",
+            "X-CargoFlow-Warehouse-Ids": "warehouse-other",
+        }
+        list_request = Request(
+            f"{self.base_url}/api/vehicles",
+            headers=other_warehouse_headers,
+        )
+        with urlopen(list_request, timeout=3) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(listed["count"], 0)
+
+        patch_request = Request(
+            f"{self.base_url}/api/vehicles/vehicle-demo-001",
+            data=json.dumps({"plateNumber": "SH-OTHER-1"}).encode("utf-8"),
+            headers={
+                **other_warehouse_headers,
+                "Content-Type": "application/json",
+            },
+            method="PATCH",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(patch_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "vehicle_scope_denied")
 
     def test_vehicle_routes_reject_duplicate_unique_keys(self) -> None:
         request = Request(

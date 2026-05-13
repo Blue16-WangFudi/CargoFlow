@@ -29,6 +29,7 @@ class CargoBindingStoreTests(unittest.TestCase):
             (
                 Vehicle(
                     id="vehicle-available-001",
+                    warehouse_id="warehouse-shanghai",
                     vehicle_number="VH-AVAILABLE-001",
                     plate_number="SH-BIND-001",
                     device_id="gps-bind-001",
@@ -36,6 +37,7 @@ class CargoBindingStoreTests(unittest.TestCase):
                 ),
                 Vehicle(
                     id="vehicle-available-002",
+                    warehouse_id="warehouse-shanghai",
                     vehicle_number="VH-AVAILABLE-002",
                     plate_number="SH-BIND-002",
                     device_id="gps-bind-002",
