@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import unittest
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from cargoflow_api.server import (
@@ -59,6 +60,14 @@ class HttpRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["shipmentId"], "CGF-DEMO-001")
+
+    def test_unknown_route_returns_json_404(self) -> None:
+        with self.assertRaises(HTTPError) as context:
+            urlopen(f"{self.base_url}/missing", timeout=3)
+
+        self.assertEqual(context.exception.code, 404)
+        payload = json.loads(context.exception.read().decode("utf-8"))
+        self.assertEqual(payload["error"], "not_found")
 
 
 if __name__ == "__main__":
