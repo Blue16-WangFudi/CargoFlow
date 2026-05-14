@@ -103,6 +103,9 @@ startup and check commands.
   points ordered by event time, including accepted GPS points, planned start
   and destination, alert points, and driver status report nodes. Key nodes are
   preserved and the current development response is not simplified.
+- `POST /api/shipments/{shipmentId}/sign` lets the cargo owner sign for a
+  shipment after the driver reports it delivered, moving the current
+  development tracking status to `signed`.
 - `GET /api/vehicles`, `GET /api/vehicles/{vehicleId}`,
   `POST /api/vehicles`, `PATCH /api/vehicles/{vehicleId}`,
   `POST /api/vehicles/{vehicleId}/disable`, and

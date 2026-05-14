@@ -19,6 +19,7 @@ from cargoflow_api.server import (
     driver_task_action_from_path,
     eta_shipment_id,
     latest_location_shipment_id,
+    sign_shipment_id,
     trajectory_shipment_id,
 )
 from cargoflow_api.access_control import Principal, Role
@@ -119,6 +120,17 @@ class PayloadTests(unittest.TestCase):
             "CGF DEMO",
         )
         self.assertIsNone(trajectory_shipment_id("/api/shipments/CGF-DEMO-001/eta"))
+
+    def test_sign_route_parser_extracts_shipment_id(self) -> None:
+        self.assertEqual(
+            sign_shipment_id("/api/shipments/CGF-DEMO-001/sign"),
+            "CGF-DEMO-001",
+        )
+        self.assertEqual(
+            sign_shipment_id("/api/shipments/CGF%20DEMO/sign"),
+            "CGF DEMO",
+        )
+        self.assertIsNone(sign_shipment_id("/api/shipments/CGF-DEMO-001/eta"))
 
     def test_alert_route_parsers_extract_alert_id(self) -> None:
         self.assertEqual(alert_id_from_path("/api/alerts/alert-demo"), "alert-demo")
@@ -1246,6 +1258,214 @@ class HttpRouteTests(unittest.TestCase):
         self.assertEqual(latest["cargoId"], "cargo-pending-001")
         self.assertEqual(latest["latestLocation"]["eventId"], "evt-http-bound-cargo")
         self.assertEqual(latest["vehicle"]["deviceId"], "gps-bind-http-001")
+
+    def test_full_tracking_acceptance_flow_through_owner_signoff(self) -> None:
+        create_vehicle_request = Request(
+            f"{self.base_url}/api/vehicles",
+            data=json.dumps(
+                {
+                    "vehicleId": "vehicle-acceptance-001",
+                    "vehicleNumber": "VH-ACCEPT-001",
+                    "plateNumber": "SH-ACCEPT-001",
+                    "deviceId": "gps-acceptance-001",
+                    "driverUserId": "driver-acceptance",
+                }
+            ).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(create_vehicle_request, timeout=3) as response:
+            created_vehicle = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(created_vehicle["vehicle"]["bindingStatus"], "available")
+
+        bind_request = Request(
+            f"{self.base_url}/api/cargo-bindings",
+            data=json.dumps(
+                {
+                    "cargoId": "cargo-pending-001",
+                    "vehicleId": "vehicle-acceptance-001",
+                    "taskId": "task-acceptance-001",
+                    "taskNumber": "TASK-ACCEPT-001",
+                }
+            ).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(bind_request, timeout=3) as response:
+            binding = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(binding["binding"]["shipmentId"], "CGF-PENDING-001")
+        self.assertEqual(binding["binding"]["transportStatus"], "bound")
+        self.assertEqual(binding["binding"]["vehicle"]["bindingStatus"], "bound")
+
+        driver_headers = {
+            "X-CargoFlow-User-Id": "driver-acceptance",
+            "X-CargoFlow-Role": "driver",
+            "X-CargoFlow-Tenant-Id": "cgf-demo",
+        }
+        driver_tasks_request = Request(
+            f"{self.base_url}/api/driver/tasks",
+            headers=driver_headers,
+        )
+        with urlopen(driver_tasks_request, timeout=3) as response:
+            driver_tasks = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(driver_tasks["count"], 1)
+        self.assertEqual(driver_tasks["tasks"][0]["taskId"], "task-acceptance-001")
+
+        event_request = Request(
+            f"{self.base_url}/api/device-events",
+            data=json.dumps(
+                {
+                    "eventId": "evt-acceptance-gps-1",
+                    "eventType": "gps",
+                    "deviceId": "gps-acceptance-001",
+                    "taskId": "task-acceptance-001",
+                    "occurredAt": "2026-05-13T10:20:00+00:00",
+                    "reportedAt": "2026-05-13T10:20:02+00:00",
+                    "schemaVersion": 1,
+                    "longitude": 121.35,
+                    "latitude": 31.18,
+                    "speedKph": 52,
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(event_request, timeout=3) as response:
+            event = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 202)
+        self.assertTrue(event["latestLocationUpdated"])
+
+        owner_beta_headers = {
+            "X-CargoFlow-User-Id": "owner-beta",
+            "X-CargoFlow-Role": "cargo_owner",
+            "X-CargoFlow-Tenant-Id": "cgf-demo",
+        }
+        latest_request = Request(
+            f"{self.base_url}/api/shipments/CGF-PENDING-001/latest-location",
+            headers=owner_beta_headers,
+        )
+        with urlopen(latest_request, timeout=3) as response:
+            latest = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(latest["transportStatus"], "bound")
+        self.assertEqual(latest["latestLocation"]["eventId"], "evt-acceptance-gps-1")
+
+        eta_request = Request(
+            f"{self.base_url}/api/shipments/CGF-PENDING-001/eta",
+            headers=owner_beta_headers,
+        )
+        with urlopen(eta_request, timeout=3) as response:
+            eta = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(eta["eta"]["status"], "available")
+        self.assertGreater(eta["eta"]["remainingDistanceKm"], 0)
+
+        in_transit_request = Request(
+            f"{self.base_url}/api/driver/tasks/task-acceptance-001/status-reports",
+            data=json.dumps(
+                {
+                    "reportStatus": "in_transit",
+                    "note": "Departed after cargo loading.",
+                }
+            ).encode("utf-8"),
+            headers={
+                **driver_headers,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(in_transit_request, timeout=3) as response:
+            in_transit = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(in_transit["task"]["transportStatus"], "in_transit")
+
+        trajectory_request = Request(
+            f"{self.base_url}/api/shipments/CGF-PENDING-001/trajectory",
+            headers=owner_beta_headers,
+        )
+        with urlopen(trajectory_request, timeout=3) as response:
+            trajectory = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        kinds = [point["kind"] for point in trajectory["trajectory"]]
+        self.assertIn("gps", kinds)
+        self.assertIn("status_report", kinds)
+        self.assertTrue(trajectory["summary"]["hasStartPoint"])
+        self.assertTrue(trajectory["summary"]["hasEndPoint"])
+
+        delivered_request = Request(
+            f"{self.base_url}/api/driver/tasks/task-acceptance-001/status-reports",
+            data=json.dumps(
+                {
+                    "reportStatus": "delivered",
+                    "note": "Cargo delivered to consignee dock.",
+                    "attachmentUrls": ["https://example.com/pod/acceptance.jpg"],
+                }
+            ).encode("utf-8"),
+            headers={
+                **driver_headers,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(delivered_request, timeout=3) as response:
+            delivered = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(delivered["task"]["transportStatus"], "delivered")
+        self.assertEqual(delivered["statusReport"]["reportStatus"], "delivered")
+
+        delivered_latest_request = Request(
+            f"{self.base_url}/api/shipments/CGF-PENDING-001/latest-location",
+            headers=owner_beta_headers,
+        )
+        with urlopen(delivered_latest_request, timeout=3) as response:
+            delivered_latest = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(delivered_latest["transportStatus"], "delivered")
+
+        sign_request = Request(
+            f"{self.base_url}/api/shipments/CGF-PENDING-001/sign",
+            data=b"{}",
+            headers={
+                **owner_beta_headers,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(sign_request, timeout=3) as response:
+            signed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(signed["shipment"]["transportStatus"], "signed")
+        self.assertEqual(signed["shipment"]["signedByUserId"], "owner-beta")
+
+        signed_driver_tasks_request = Request(
+            f"{self.base_url}/api/driver/tasks",
+            headers=driver_headers,
+        )
+        with urlopen(signed_driver_tasks_request, timeout=3) as response:
+            signed_driver_tasks = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(signed_driver_tasks["count"], 0)
 
     def test_cargo_binding_route_rejects_cargo_owner(self) -> None:
         request = Request(

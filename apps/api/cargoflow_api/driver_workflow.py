@@ -159,6 +159,53 @@ class DriverWorkflowStore:
                 },
             }
 
+    def register_task(
+        self,
+        task: TransportTask,
+        *,
+        shipment_id: str,
+        tenant_id: str,
+        cargo_number: str,
+        cargo_name: str,
+        vehicle_number: str,
+        plate_number: str,
+        origin: str,
+        destination: str,
+    ) -> DriverTaskRecord:
+        with self._lock:
+            record = DriverTaskRecord(
+                task=task,
+                shipment_id=shipment_id,
+                tenant_id=tenant_id,
+                cargo_number=cargo_number,
+                cargo_name=cargo_name,
+                vehicle_number=vehicle_number,
+                plate_number=plate_number,
+                origin=origin,
+                destination=destination,
+            )
+            self._tasks[task.id] = record
+            return record
+
+    def update_task_status(
+        self,
+        task_id: str,
+        status: TransportTaskStatus,
+        *,
+        now: datetime | None = None,
+    ) -> DriverTaskRecord:
+        with self._lock:
+            record = self._task_for(task_id)
+            updated_at = _utc_now(now)
+            updated_task = replace(
+                record.task,
+                status=status,
+                updated_at=updated_at,
+            )
+            updated_record = replace(record, task=updated_task)
+            self._tasks[task_id] = updated_record
+            return updated_record
+
     def acknowledge_command(
         self,
         command_id: str,
@@ -428,7 +475,7 @@ def _status_report_state(value: str) -> StatusReportState:
 
 
 def _attachment_urls(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    value = _value(payload, "attachmentUrls", default=())
+    value = _value(payload, "attachmentUrls", default=None)
     if value is None:
         return ()
     if not isinstance(value, list):
