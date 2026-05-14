@@ -33,6 +33,10 @@ from cargoflow_api.alert_handling import (
 )
 from cargoflow_api.alert_rules import AlertRuleStore, alert_to_wire
 from cargoflow_api.cargo_binding import CargoBindingError, CargoBindingStore
+from cargoflow_api.dispatch_distribution import (
+    DispatchDistributionError,
+    DispatchDistributionStore,
+)
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
 from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
@@ -61,6 +65,7 @@ DEVICE_EVENTS = DeviceEventStore.demo(ALERT_RULES)
 ETA_SERVICE = EtaService()
 VEHICLES = VehicleStore.demo()
 CARGO_BINDINGS = CargoBindingStore.demo()
+DISPATCH_DISTRIBUTION = DispatchDistributionStore.demo()
 
 
 def utc_now_iso() -> str:
@@ -196,6 +201,9 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/vehicles":
             self.send_vehicle_list()
+            return
+        if path == "/api/dispatch/vehicle-distribution":
+            self.send_dispatch_vehicle_distribution()
             return
         if path == "/api/alerts":
             self.send_alert_list()
@@ -337,6 +345,27 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             self.send_vehicle_error(exc)
             return
         self.send_json(HTTPStatus.OK, {"vehicle": vehicle_to_wire(vehicle)})
+
+    def send_dispatch_vehicle_distribution(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = DISPATCH_DISTRIBUTION.list_vehicles(
+                principal,
+                status_filter=self.query_param("status"),
+            )
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DispatchDistributionError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(HTTPStatus.OK, payload)
 
     def create_vehicle(self) -> None:
         try:

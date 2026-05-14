@@ -61,6 +61,7 @@ button:disabled {
 .mode-tabs {
   display: inline-flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 6px;
   border: 1px solid rgb(209 217 224 / 14%);
   border-radius: 8px;
@@ -76,6 +77,7 @@ button:disabled {
   color: #8b949e;
   padding: 0 14px;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .mode-tab.is-active {
@@ -171,13 +173,22 @@ h3 {
   align-items: start;
 }
 
+.dispatch-map-workspace {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+
 .view-panel {
   display: none;
 }
 
 .view-panel.is-active.workspace,
 .view-panel.is-active.admin-workspace,
-.view-panel.is-active.shipper-workspace {
+.view-panel.is-active.shipper-workspace,
+.view-panel.is-active.dispatch-map-workspace {
   display: grid;
 }
 
@@ -229,7 +240,8 @@ h3 {
 }
 
 .icon-button:hover,
-.filter-button:hover {
+.alert-filter-button:hover,
+.distribution-filter-button:hover {
   border-color: #58a6ff;
 }
 
@@ -258,7 +270,8 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.filter-button,
+.alert-filter-button,
+.distribution-filter-button,
 .primary-button,
 .secondary-button,
 .neutral-button {
@@ -267,16 +280,236 @@ h3 {
   font-weight: 700;
 }
 
-.filter-button {
+.alert-filter-button,
+.distribution-filter-button {
   border: 1px solid rgb(209 217 224 / 18%);
   background: #0d1117;
   color: #c9d1d9;
 }
 
-.filter-button.is-active {
+.alert-filter-button.is-active,
+.distribution-filter-button.is-active {
   border-color: #58a6ff;
   background: rgb(31 111 235 / 18%);
   color: #f0f6fc;
+}
+
+.distribution-filters {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.distribution-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.distribution-summary article {
+  display: grid;
+  min-height: 76px;
+  align-content: center;
+  gap: 5px;
+  border: 1px solid rgb(209 217 224 / 12%);
+  border-radius: 8px;
+  background: #0d1117;
+  padding: 12px;
+}
+
+.distribution-summary span {
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.distribution-summary strong {
+  color: #f0f6fc;
+  font-size: 24px;
+  line-height: 30px;
+}
+
+.vehicle-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.vehicle-card {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid rgb(209 217 224 / 14%);
+  border-radius: 8px;
+  background: #0d1117;
+  color: #f0f6fc;
+  padding: 14px;
+  text-align: left;
+}
+
+.vehicle-card[aria-pressed="true"] {
+  border-color: #58a6ff;
+  box-shadow: inset 3px 0 0 #58a6ff;
+}
+
+.vehicle-card-top,
+.vehicle-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vehicle-card-top {
+  flex-wrap: wrap;
+}
+
+.vehicle-card-meta,
+.vehicle-card-foot {
+  color: #8b949e;
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.vehicle-card-foot {
+  align-items: flex-start;
+}
+
+.distribution-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.map-panel {
+  min-height: 510px;
+}
+
+.vehicle-map {
+  position: relative;
+  min-height: 414px;
+  border: 1px solid rgb(209 217 224 / 10%);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgb(88 166 255 / 8%) 1px, transparent 1px),
+    linear-gradient(180deg, rgb(88 166 255 / 8%) 1px, transparent 1px),
+    radial-gradient(circle at 22% 26%, rgb(63 185 80 / 13%), transparent 24%),
+    #0d1117;
+  background-size:
+    48px 48px,
+    48px 48px,
+    auto,
+    auto;
+  overflow: hidden;
+}
+
+.vehicle-map::before,
+.vehicle-map::after {
+  position: absolute;
+  border: 1px solid rgb(88 166 255 / 16%);
+  border-radius: 999px;
+  content: "";
+  pointer-events: none;
+}
+
+.vehicle-map::before {
+  inset: 16% 12%;
+}
+
+.vehicle-map::after {
+  inset: 32% 28%;
+}
+
+.vehicle-marker {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  min-width: 108px;
+  gap: 6px;
+  justify-items: center;
+  border: 0;
+  background: transparent;
+  color: #f0f6fc;
+  padding: 0;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.vehicle-marker strong {
+  border: 1px solid rgb(209 217 224 / 18%);
+  border-radius: 999px;
+  background: rgb(1 4 9 / 82%);
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.marker-dot {
+  width: 20px;
+  height: 20px;
+  border: 4px solid #0d1117;
+  border-radius: 999px;
+  background: #3fb950;
+  box-shadow: 0 0 0 4px rgb(63 185 80 / 24%);
+}
+
+.vehicle-marker.high .marker-dot {
+  background: #f85149;
+  box-shadow: 0 0 0 5px rgb(248 81 73 / 28%);
+}
+
+.vehicle-marker.delayed .marker-dot {
+  background: #d29922;
+  box-shadow: 0 0 0 4px rgb(210 153 34 / 26%);
+}
+
+.vehicle-marker.offline .marker-dot,
+.vehicle-marker.available .marker-dot {
+  background: #8b949e;
+  box-shadow: 0 0 0 4px rgb(139 148 158 / 22%);
+}
+
+.vehicle-marker[aria-pressed="true"] .marker-dot {
+  outline: 3px solid #58a6ff;
+  outline-offset: 3px;
+}
+
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.map-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #3fb950;
+}
+
+.legend-dot.delayed {
+  background: #d29922;
+}
+
+.legend-dot.alert {
+  background: #f85149;
+}
+
+.vehicle-alert-action {
+  width: 100%;
+  margin-top: 16px;
 }
 
 .alert-list {
@@ -383,7 +616,8 @@ dd {
 
 .badge.low,
 .badge.closed,
-.badge.acknowledged {
+.badge.acknowledged,
+.badge.online {
   border-color: rgb(63 185 80 / 36%);
   background: rgb(63 185 80 / 14%);
   color: #7ee787;
@@ -391,7 +625,9 @@ dd {
 
 .badge.false_positive,
 .badge.failed,
-.badge.revoked {
+.badge.revoked,
+.badge.offline,
+.badge.available {
   border-color: rgb(139 148 158 / 35%);
   background: rgb(139 148 158 / 14%);
   color: #c9d1d9;
@@ -869,6 +1105,8 @@ button:focus-visible {
   .workspace,
   .admin-workspace,
   .shipper-workspace,
+  .dispatch-map-workspace,
+  .distribution-layout,
   .detail-grid,
   .workflow-grid,
   .command-item,
@@ -917,6 +1155,7 @@ button:focus-visible {
 
   .filter-row,
   .filter-actions,
+  .distribution-summary,
   .info-list,
   .timeline,
   .quick-actions,

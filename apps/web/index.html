@@ -15,7 +15,8 @@
           <h1 id="page-title">Operations Console</h1>
         </div>
         <nav class="mode-tabs" aria-label="Workspace views">
-          <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch</button>
+          <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch Map</button>
+          <button class="mode-tab" type="button" data-view="alert-handling">Alert Handling</button>
           <button class="mode-tab" type="button" data-view="admin-logs">Admin Logs</button>
           <button class="mode-tab" type="button" data-view="shipper">Shipper Detail</button>
         </nav>
@@ -148,7 +149,108 @@
         </section>
       </section>
 
-      <section class="workspace view-panel is-active" id="dispatch-view" aria-label="Dispatch alert workspace">
+      <section class="dispatch-map-workspace view-panel is-active" id="dispatch-view" aria-label="Dispatch vehicle distribution">
+        <aside class="queue-panel" aria-labelledby="distribution-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Dispatcher</p>
+              <h2 id="distribution-title">Vehicle Distribution</h2>
+            </div>
+            <button class="icon-button" id="refresh-distribution" type="button" title="Refresh vehicles" aria-label="Refresh vehicles">
+              &#8635;
+            </button>
+          </div>
+
+          <div class="filter-row distribution-filters" role="group" aria-label="Vehicle distribution filter">
+            <button class="distribution-filter-button is-active" type="button" data-distribution-status="">All</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="online">Online</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="in_transit">In Transit</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="alert">Alerts</button>
+          </div>
+
+          <div class="distribution-summary" aria-label="Vehicle distribution summary">
+            <article>
+              <span>Total</span>
+              <strong id="distribution-total">0</strong>
+            </article>
+            <article>
+              <span>Online</span>
+              <strong id="distribution-online">0</strong>
+            </article>
+            <article>
+              <span>Moving</span>
+              <strong id="distribution-in-transit">0</strong>
+            </article>
+            <article>
+              <span>Alerts</span>
+              <strong id="distribution-alerting">0</strong>
+            </article>
+          </div>
+
+          <div class="vehicle-list" id="vehicle-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="distribution-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Live Map</p>
+              <h2 id="distribution-detail-title">Regional Vehicle Map</h2>
+            </div>
+            <div class="alert-summary" id="distribution-summary-label">Waiting for vehicles</div>
+          </div>
+
+          <div class="distribution-layout">
+            <article class="info-panel map-panel" aria-labelledby="map-title">
+              <div class="section-header compact">
+                <h3 id="map-title">East China Dispatch Region</h3>
+                <span class="hint" id="map-count">0 vehicles</span>
+              </div>
+              <div class="vehicle-map" id="vehicle-map" aria-label="Vehicle location map"></div>
+              <div class="map-legend" aria-label="Map legend">
+                <span><i class="legend-dot online"></i>Online</span>
+                <span><i class="legend-dot delayed"></i>Delayed</span>
+                <span><i class="legend-dot alert"></i>Active alert</span>
+              </div>
+            </article>
+
+            <article class="info-panel vehicle-detail-card" aria-labelledby="vehicle-detail-title">
+              <div class="section-header compact">
+                <h3 id="vehicle-detail-title">Selected Vehicle</h3>
+                <span class="badge" id="selected-vehicle-state">-</span>
+              </div>
+              <dl class="info-list compact-list">
+                <div>
+                  <dt>Vehicle</dt>
+                  <dd id="selected-vehicle-number">-</dd>
+                </div>
+                <div>
+                  <dt>Plate</dt>
+                  <dd id="selected-vehicle-plate">-</dd>
+                </div>
+                <div>
+                  <dt>Cargo</dt>
+                  <dd id="selected-vehicle-cargo">-</dd>
+                </div>
+                <div>
+                  <dt>Driver</dt>
+                  <dd id="selected-vehicle-driver">-</dd>
+                </div>
+                <div>
+                  <dt>Location</dt>
+                  <dd id="selected-vehicle-location">-</dd>
+                </div>
+                <div>
+                  <dt>Updated</dt>
+                  <dd id="selected-vehicle-updated">-</dd>
+                </div>
+              </dl>
+              <button class="primary-button vehicle-alert-action" id="open-vehicle-alert" type="button">Open Alert Detail</button>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section class="workspace view-panel" id="alert-handling-view" aria-label="Dispatch alert workspace">
         <aside class="queue-panel" aria-labelledby="queue-title">
           <div class="section-header">
             <div>
@@ -160,9 +262,9 @@
             </button>
           </div>
           <div class="filter-row" role="group" aria-label="Alert status filter">
-            <button class="filter-button is-active" type="button" data-status="">All</button>
-            <button class="filter-button" type="button" data-status="pending">Pending</button>
-            <button class="filter-button" type="button" data-status="processing">Processing</button>
+            <button class="alert-filter-button is-active" type="button" data-status="">All</button>
+            <button class="alert-filter-button" type="button" data-status="pending">Pending</button>
+            <button class="alert-filter-button" type="button" data-status="processing">Processing</button>
           </div>
           <div class="alert-list" id="alert-list" aria-live="polite"></div>
         </aside>

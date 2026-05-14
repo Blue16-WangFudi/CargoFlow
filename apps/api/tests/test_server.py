@@ -23,6 +23,7 @@ from cargoflow_api.access_control import Principal, Role
 from cargoflow_api.alert_handling import AlertHandlingStore
 from cargoflow_api.alert_rules import AlertRuleStore
 from cargoflow_api.cargo_binding import CargoBindingStore
+from cargoflow_api.dispatch_distribution import DispatchDistributionStore
 from cargoflow_api.location_ingest import DeviceEventStore
 from cargoflow_api.shipment_tracking import ShipmentTrackingStore
 from cargoflow_api.vehicle_management import VehicleStore
@@ -143,6 +144,7 @@ class HttpRouteTests(unittest.TestCase):
         server_module.VEHICLES = VehicleStore.demo()
         server_module.SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
         server_module.CARGO_BINDINGS = CargoBindingStore.demo()
+        server_module.DISPATCH_DISTRIBUTION = DispatchDistributionStore.demo()
 
     def test_health_route(self) -> None:
         with urlopen(f"{self.base_url}/health", timeout=3) as response:
@@ -571,6 +573,78 @@ class HttpRouteTests(unittest.TestCase):
         payload = json.loads(error.read().decode("utf-8"))
         self.assertEqual(error.code, 403)
         self.assertEqual(payload["error"], "alert_access_denied")
+
+    def test_dispatch_vehicle_distribution_returns_scoped_map_payload(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/dispatch/vehicle-distribution",
+            headers=DISPATCHER_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["summary"]["total"], 4)
+        self.assertEqual(payload["summary"]["online"], 2)
+        self.assertEqual(payload["summary"]["inTransit"], 2)
+        self.assertEqual(payload["summary"]["alerting"], 1)
+        self.assertEqual(payload["count"], 4)
+        self.assertEqual(payload["vehicles"][0]["vehicleId"], "vehicle-demo-001")
+        self.assertEqual(payload["vehicles"][0]["latestLocation"]["longitude"], 121.52)
+        self.assertTrue(payload["vehicles"][0]["alertSummary"]["hasActiveAlert"])
+
+    def test_dispatch_vehicle_distribution_filters_alerting_vehicles(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/dispatch/vehicle-distribution?status=alert",
+            headers=DISPATCHER_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["filters"]["status"], "alert")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["vehicles"][0]["vehicleId"], "vehicle-demo-001")
+
+    def test_dispatch_vehicle_distribution_rejects_unscoped_or_invalid_requests(self) -> None:
+        unscoped_request = Request(
+            f"{self.base_url}/api/dispatch/vehicle-distribution",
+            headers={
+                **DISPATCHER_AUTH_HEADERS,
+                "X-CargoFlow-Dispatch-Region-Ids": "north-china",
+            },
+        )
+        with urlopen(unscoped_request, timeout=3) as response:
+            unscoped = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(unscoped["count"], 0)
+        self.assertEqual(unscoped["summary"]["total"], 0)
+
+        owner_request = Request(
+            f"{self.base_url}/api/dispatch/vehicle-distribution",
+            headers=DEMO_AUTH_HEADERS,
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(owner_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "dispatch_distribution_access_denied")
+
+        invalid_filter_request = Request(
+            f"{self.base_url}/api/dispatch/vehicle-distribution?status=offline",
+            headers=DISPATCHER_AUTH_HEADERS,
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(invalid_filter_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 400)
+        self.assertEqual(payload["error"], "invalid_distribution_filter")
 
     def test_alert_log_route_filters_and_returns_chain_for_system_admin(self) -> None:
         request = Request(

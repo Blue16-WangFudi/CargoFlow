@@ -52,6 +52,7 @@ Default URLs:
 - Demo latest location API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/latest-location
 - Demo ETA API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/eta
 - Demo trajectory replay API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/trajectory
+- Demo dispatcher vehicle distribution API: http://127.0.0.1:8000/api/dispatch/vehicle-distribution
 - Frontend console: http://127.0.0.1:5173
 
 Ports can be changed with environment variables:
@@ -132,6 +133,11 @@ startup and check commands.
   system-admin alert log contract. The endpoints support `type`, `severity`,
   `status`, `vehicleId`, `cargoId`, `triggeredFrom`, and `triggeredTo` filters
   and return each alert's notification and dispatch-command chain.
+- `GET /api/dispatch/vehicle-distribution` provides the current dispatcher
+  vehicle map contract. Scoped dispatchers and system admins can read vehicle
+  points, online and transport states, bound cargo context, and active alert
+  summaries; the development endpoint supports `status=online`,
+  `status=in_transit`, and `status=alert` filters.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).
