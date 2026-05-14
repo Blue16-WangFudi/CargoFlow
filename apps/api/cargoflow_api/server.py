@@ -37,6 +37,7 @@ from cargoflow_api.dispatch_distribution import (
     DispatchDistributionError,
     DispatchDistributionStore,
 )
+from cargoflow_api.driver_workflow import DriverWorkflowError, DriverWorkflowStore
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
 from cargoflow_api.qa_context import (
@@ -75,6 +76,7 @@ ETA_SERVICE = EtaService()
 VEHICLES = VehicleStore.demo()
 CARGO_BINDINGS = CargoBindingStore.demo()
 DISPATCH_DISTRIBUTION = DispatchDistributionStore.demo()
+DRIVER_WORKFLOW = DriverWorkflowStore.demo()
 
 
 def utc_now_iso() -> str:
@@ -190,9 +192,27 @@ def qa_record_id_from_path(path: str) -> str | None:
     return None
 
 
+def driver_task_action_from_path(path: str, action: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 5 and parts[:3] == ["api", "driver", "tasks"] and parts[4] == action:
+        return parts[3]
+    return None
+
+
 def qa_record_action_from_path(path: str, action: str) -> str | None:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if len(parts) == 5 and parts[:3] == ["api", "qa", "records"] and parts[4] == action:
+        return parts[3]
+    return None
+
+
+def driver_command_action_from_path(path: str, action: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if (
+        len(parts) == 5
+        and parts[:3] == ["api", "driver", "commands"]
+        and parts[4] == action
+    ):
         return parts[3]
     return None
 
@@ -244,6 +264,9 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         if qa_record_id is not None:
             self.send_qa_record(qa_record_id)
             return
+        if path == "/api/driver/tasks":
+            self.send_driver_tasks()
+            return
         vehicle_id = vehicle_id_from_path(path)
         if vehicle_id is not None:
             self.send_vehicle(vehicle_id)
@@ -289,6 +312,14 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         qa_record_id = qa_record_action_from_path(path, "feedback")
         if qa_record_id is not None:
             self.apply_qa_feedback(qa_record_id)
+            return
+        task_id = driver_task_action_from_path(path, "status-reports")
+        if task_id is not None:
+            self.create_driver_status_report(task_id)
+            return
+        command_id = driver_command_action_from_path(path, "acknowledge")
+        if command_id is not None:
+            self.acknowledge_driver_command(command_id)
             return
         alert_id = alert_action_from_path(path, "process")
         if alert_id is not None:
@@ -401,6 +432,18 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                     "message": exc.message,
                 },
             )
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
+    def send_driver_tasks(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = DRIVER_WORKFLOW.list_tasks(principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DriverWorkflowError as exc:
+            self.send_driver_workflow_error(exc)
             return
         self.send_json(HTTPStatus.OK, payload)
 
@@ -674,6 +717,34 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.OK, {"alert": alert_to_wire(alert)})
 
+    def acknowledge_driver_command(self, command_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = DRIVER_WORKFLOW.acknowledge_command(command_id, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DriverWorkflowError as exc:
+            self.send_driver_workflow_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
+    def create_driver_status_report(self, task_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            created = DRIVER_WORKFLOW.create_status_report(task_id, payload, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DeviceEventError as exc:
+            self.send_device_event_error(exc)
+            return
+        except DriverWorkflowError as exc:
+            self.send_driver_workflow_error(exc)
+            return
+        self.send_json(HTTPStatus.CREATED, created)
+
     def send_latest_shipment_location(self, shipment_id: str) -> None:
         try:
             principal = parse_principal(self.headers)
@@ -819,6 +890,15 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         )
 
     def send_qa_error(self, exc: QaServiceError) -> None:
+        self.send_json(
+            exc.status,
+            {
+                "error": exc.error_code,
+                "message": exc.message,
+            },
+        )
+
+    def send_driver_workflow_error(self, exc: DriverWorkflowError) -> None:
         self.send_json(
             exc.status,
             {

@@ -54,6 +54,7 @@ Default URLs:
 - Demo trajectory replay API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/trajectory
 - Demo dispatcher vehicle distribution API: http://127.0.0.1:8000/api/dispatch/vehicle-distribution
 - Demo Q&A ask API: http://127.0.0.1:8000/api/qa/ask
+- Demo driver tasks API: http://127.0.0.1:8000/api/driver/tasks
 - Frontend console: http://127.0.0.1:5173
 
 Ports can be changed with environment variables:
@@ -147,6 +148,13 @@ startup and check commands.
   deterministic until a model-backed retrieval layer is wired. Business-context
   answers first pass through the role-scoped Q&A context filter, and unanswered
   or unauthorized requests are recorded with a failure reason.
+- `GET /api/driver/tasks`,
+  `POST /api/driver/commands/{commandId}/acknowledge`, and
+  `POST /api/driver/tasks/{taskId}/status-reports` provide the current driver
+  workspace contract. Drivers can only read their own active transport tasks,
+  confirm commands targeted to them, and submit forward-only `loaded`,
+  `in_transit`, or `delivered` status reports with notes and optional
+  attachment URLs.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).

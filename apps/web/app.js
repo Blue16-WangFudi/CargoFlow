@@ -24,6 +24,12 @@ const systemAdminAuthHeaders = {
   "X-CargoFlow-Tenant-Id": "cgf-demo",
 };
 
+const driverAuthHeaders = {
+  "X-CargoFlow-User-Id": "driver-demo",
+  "X-CargoFlow-Role": "driver",
+  "X-CargoFlow-Tenant-Id": "cgf-demo",
+};
+
 const state = {
   alerts: [],
   logs: [],
@@ -48,6 +54,10 @@ const state = {
     latest: null,
     eta: null,
     trajectory: null,
+  },
+  driver: {
+    tasks: [],
+    selectedTaskId: null,
   },
 };
 
@@ -255,6 +265,22 @@ const loadShipperDetail = async () => {
   setStatus(`${shipmentId} cargo detail ready`, "ok");
 };
 
+const loadDriverTasks = async () => {
+  setStatus("Loading driver tasks", "loading");
+  const payload = await requestJson("/api/driver/tasks", {
+    authHeaders: driverAuthHeaders,
+  });
+  state.driver.tasks = payload.tasks || [];
+  if (!state.driver.tasks.some((task) => task.taskId === state.driver.selectedTaskId)) {
+    state.driver.selectedTaskId =
+      state.driver.tasks.find((task) => task.summary?.unconfirmedCommandCount > 0)?.taskId ||
+      state.driver.tasks[0]?.taskId ||
+      null;
+  }
+  renderDriverWorkspace();
+  setStatus(`${payload.count} driver task${payload.count === 1 ? "" : "s"}`, "ok");
+};
+
 const renderDistribution = () => {
   const summary = state.distribution.summary;
   setText("distribution-total", summary.total ?? 0);
@@ -414,6 +440,174 @@ const vehicleBadgeClass = (vehicle) => {
   }
   return vehicle.onlineStatus || vehicle.bindingStatus || "offline";
 };
+
+const selectedDriverTask = () =>
+  state.driver.tasks.find((task) => task.taskId === state.driver.selectedTaskId);
+
+const renderDriverWorkspace = () => {
+  renderDriverTaskList();
+  renderSelectedDriverTask();
+};
+
+const renderDriverTaskList = () => {
+  const list = $("driver-task-list");
+  list.replaceChildren();
+  const totalCommands = state.driver.tasks.reduce(
+    (sum, task) => sum + (task.summary?.unconfirmedCommandCount || 0),
+    0,
+  );
+  setText(
+    "driver-task-summary",
+    `${state.driver.tasks.length} active · ${totalCommands} requiring confirmation`,
+  );
+  if (state.driver.tasks.length === 0) {
+    list.append(emptyMessage("No active transport tasks are assigned to this driver."));
+    return;
+  }
+
+  state.driver.tasks.forEach((task) => {
+    const button = document.createElement("button");
+    button.className = "driver-task-card";
+    button.type = "button";
+    button.dataset.taskId = task.taskId;
+    button.setAttribute("aria-pressed", String(task.taskId === state.driver.selectedTaskId));
+
+    const top = createElement("span", "driver-task-card-top");
+    top.append(
+      createElement("strong", "", task.taskNumber),
+      createElement("span", `badge ${task.transportStatus}`, titleCase(task.transportStatus)),
+    );
+    const meta = createElement(
+      "span",
+      "driver-task-card-meta",
+      `${task.cargoNumber} · ${task.vehicleNumber}`,
+    );
+    const foot = createElement(
+      "span",
+      "driver-task-card-foot",
+      `${task.origin} -> ${task.destination}`,
+    );
+    const commandHint = createElement(
+      "span",
+      "driver-task-card-meta",
+      `${task.summary?.unconfirmedCommandCount || 0} pending command · ${task.summary?.reportCount || 0} reports`,
+    );
+    button.append(top, meta, foot, commandHint);
+    button.addEventListener("click", () => {
+      state.driver.selectedTaskId = task.taskId;
+      renderDriverWorkspace();
+    });
+    list.append(button);
+  });
+};
+
+const renderSelectedDriverTask = () => {
+  const task = selectedDriverTask();
+  if (!task) {
+    setText("driver-task-number", "-");
+    setText("driver-shipment-id", "-");
+    setText("driver-cargo-name", "-");
+    setText("driver-vehicle-label", "-");
+    setText("driver-planned-arrival", "-");
+    setText("driver-route-label", "-");
+    setText("driver-task-status", "-");
+    $("driver-task-status").className = "badge";
+    $("submit-driver-report").disabled = true;
+    renderDriverCommands([]);
+    renderDriverReports([]);
+    return;
+  }
+
+  setText("driver-task-number", task.taskNumber);
+  setText("driver-shipment-id", task.shipmentId);
+  setText("driver-cargo-name", task.cargoName || task.cargoNumber);
+  setText("driver-vehicle-label", `${task.vehicleNumber} · ${task.plateNumber}`);
+  setText("driver-planned-arrival", formatDate(task.plannedArrivalAt));
+  setText("driver-route-label", `${task.origin} -> ${task.destination}`);
+  setText("driver-task-status", titleCase(task.transportStatus));
+  $("driver-task-status").className = `badge ${task.transportStatus}`;
+  renderDriverCommands(task.commands || []);
+  renderDriverReports(task.statusReports || []);
+  syncDriverReportOptions(task);
+  $("submit-driver-report").disabled = (task.summary?.nextAllowedReports || []).length === 0;
+};
+
+const renderDriverCommands = (commands) => {
+  const list = $("driver-command-list");
+  list.replaceChildren();
+  setText("driver-command-count", `${commands.length} command${commands.length === 1 ? "" : "s"}`);
+  if (commands.length === 0) {
+    list.append(emptyMessage("No dispatch commands are assigned to this task."));
+    return;
+  }
+
+  commands.forEach((command) => {
+    const item = createElement("article", "driver-command-item");
+    const main = createElement("div", "driver-command-main");
+    main.append(
+      createElement("span", `badge ${command.status}`, titleCase(command.status)),
+      createElement("strong", "", command.commandNumber),
+      createElement("p", "", command.content),
+      createElement("small", "", `Issued ${formatDate(command.issuedAt)}`),
+    );
+    const action = createElement(
+      "button",
+      "neutral-button compact-button",
+      driverCommandActionLabel(command),
+    );
+    action.type = "button";
+    action.disabled = isTerminalDriverCommand(command);
+    action.addEventListener("click", () => acknowledgeDriverCommand(command.commandId));
+    item.append(main, action);
+    list.append(item);
+  });
+};
+
+const renderDriverReports = (reports) => {
+  const list = $("driver-report-list");
+  list.replaceChildren();
+  setText("driver-report-count", `${reports.length} report${reports.length === 1 ? "" : "s"}`);
+  if (reports.length === 0) {
+    list.append(emptyMessage("No status reports have been submitted for this task."));
+    return;
+  }
+  reports.forEach((report) => {
+    const item = createElement("article", "driver-report-item");
+    item.append(
+      createElement("span", `badge ${report.reportStatus}`, titleCase(report.reportStatus)),
+      createElement("strong", "", formatDate(report.reportedAt)),
+      createElement("p", "", report.note || "No note"),
+    );
+    if ((report.attachmentUrls || []).length > 0) {
+      item.append(createElement("small", "", `${report.attachmentUrls.length} attachment URL`));
+    }
+    list.append(item);
+  });
+};
+
+const syncDriverReportOptions = (task) => {
+  const allowed = task.summary?.nextAllowedReports || [];
+  const select = $("driver-report-status");
+  Array.from(select.options).forEach((option) => {
+    option.disabled = allowed.length > 0 && !allowed.includes(option.value);
+  });
+  if (!allowed.includes(select.value) && allowed.length > 0) {
+    select.value = allowed[0];
+  }
+};
+
+const driverCommandActionLabel = (command) => {
+  if (command.status === "acknowledged") {
+    return "Confirmed";
+  }
+  if (command.status === "failed" || command.status === "revoked") {
+    return titleCase(command.status);
+  }
+  return "Confirm";
+};
+
+const isTerminalDriverCommand = (command) =>
+  ["acknowledged", "failed", "revoked"].includes(command.status);
 
 const renderAlertList = () => {
   const list = $("alert-list");
@@ -937,6 +1131,40 @@ const closeAlert = async (event) => {
   setStatus(`${closed.alert.alertNumber} closed`, "ok");
 };
 
+const acknowledgeDriverCommand = async (commandId) => {
+  setStatus("Confirming command", "loading");
+  await requestJson(`/api/driver/commands/${encodeURIComponent(commandId)}/acknowledge`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    authHeaders: driverAuthHeaders,
+  });
+  await loadDriverTasks();
+  setStatus("Command confirmed", "ok");
+};
+
+const submitDriverReport = async (event) => {
+  event.preventDefault();
+  const task = selectedDriverTask();
+  if (!task) {
+    return;
+  }
+  setStatus("Submitting driver report", "loading");
+  const attachmentUrl = $("driver-attachment-url").value.trim();
+  const payload = {
+    reportStatus: $("driver-report-status").value,
+    note: $("driver-report-note").value,
+    attachmentUrls: attachmentUrl ? [attachmentUrl] : [],
+  };
+  await requestJson(`/api/driver/tasks/${encodeURIComponent(task.taskId)}/status-reports`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    authHeaders: driverAuthHeaders,
+  });
+  $("driver-attachment-url").value = "";
+  await loadDriverTasks();
+  setStatus("Driver report submitted", "ok");
+};
+
 const wireEvents = () => {
   document.querySelectorAll(".mode-tab").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
@@ -945,6 +1173,7 @@ const wireEvents = () => {
   $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
   $("refresh-logs").addEventListener("click", () => loadLogs().catch(handleError));
   $("refresh-shipper").addEventListener("click", () => loadShipperDetail().catch(handleError));
+  $("refresh-driver").addEventListener("click", () => loadDriverTasks().catch(handleError));
   $("show-trajectory").addEventListener("click", () => {
     $("shipper-trajectory-section").scrollIntoView({ block: "start", behavior: "smooth" });
   });
@@ -972,6 +1201,9 @@ const wireEvents = () => {
   );
   $("close-form").addEventListener("submit", (event) =>
     closeAlert(event).catch(handleError),
+  );
+  $("driver-report-form").addEventListener("submit", (event) =>
+    submitDriverReport(event).catch(handleError),
   );
   document.querySelectorAll(".alert-filter-button").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1024,6 +1256,14 @@ const switchView = (view) => {
   }
   if (state.activeView === "admin-logs" && state.logs.length === 0) {
     loadLogs().catch(handleError);
+  }
+  if (state.activeView === "driver" && state.driver.tasks.length === 0) {
+    loadDriverTasks().catch(handleError);
+  } else if (state.activeView === "driver") {
+    setStatus(
+      `${state.driver.tasks.length} driver task${state.driver.tasks.length === 1 ? "" : "s"}`,
+      "ok",
+    );
   }
   if (state.activeView === "shipper" && !state.shipper.snapshot) {
     loadShipperDetail().catch(handleError);

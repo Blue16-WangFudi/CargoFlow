@@ -15,6 +15,8 @@ from cargoflow_api.server import (
     build_demo_shipment,
     build_health_payload,
     create_server,
+    driver_command_action_from_path,
+    driver_task_action_from_path,
     eta_shipment_id,
     latest_location_shipment_id,
     trajectory_shipment_id,
@@ -24,6 +26,7 @@ from cargoflow_api.alert_handling import AlertHandlingStore
 from cargoflow_api.alert_rules import AlertRuleStore
 from cargoflow_api.cargo_binding import CargoBindingStore
 from cargoflow_api.dispatch_distribution import DispatchDistributionStore
+from cargoflow_api.driver_workflow import DriverWorkflowStore
 from cargoflow_api.location_ingest import DeviceEventStore
 from cargoflow_api.qa_service import QaService
 from cargoflow_api.shipment_tracking import ShipmentTrackingStore
@@ -50,6 +53,11 @@ DISPATCHER_AUTH_HEADERS = {
 SYSTEM_ADMIN_AUTH_HEADERS = {
     "X-CargoFlow-User-Id": "admin-demo",
     "X-CargoFlow-Role": "system_admin",
+    "X-CargoFlow-Tenant-Id": "cgf-demo",
+}
+DRIVER_AUTH_HEADERS = {
+    "X-CargoFlow-User-Id": "driver-demo",
+    "X-CargoFlow-Role": "driver",
     "X-CargoFlow-Tenant-Id": "cgf-demo",
 }
 
@@ -122,6 +130,32 @@ class PayloadTests(unittest.TestCase):
         )
         self.assertIsNone(alert_action_from_path("/api/alerts/alert-demo", "close"))
 
+    def test_driver_route_parsers_extract_ids(self) -> None:
+        self.assertEqual(
+            driver_task_action_from_path(
+                "/api/driver/tasks/task-demo-001/status-reports",
+                "status-reports",
+            ),
+            "task-demo-001",
+        )
+        self.assertEqual(
+            driver_task_action_from_path(
+                "/api/driver/tasks/task%201/status-reports",
+                "status-reports",
+            ),
+            "task 1",
+        )
+        self.assertIsNone(
+            driver_task_action_from_path("/api/driver/tasks/task-demo-001", "status-reports")
+        )
+        self.assertEqual(
+            driver_command_action_from_path(
+                "/api/driver/commands/cmd-demo-box-001/acknowledge",
+                "acknowledge",
+            ),
+            "cmd-demo-box-001",
+        )
+
 
 class HttpRouteTests(unittest.TestCase):
     @classmethod
@@ -146,6 +180,7 @@ class HttpRouteTests(unittest.TestCase):
         server_module.SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
         server_module.CARGO_BINDINGS = CargoBindingStore.demo()
         server_module.DISPATCH_DISTRIBUTION = DispatchDistributionStore.demo()
+        server_module.DRIVER_WORKFLOW = DriverWorkflowStore.demo()
         server_module.QA_SERVICE = QaService(
             context_filter=server_module.build_demo_business_context_filter()
         )
@@ -649,6 +684,97 @@ class HttpRouteTests(unittest.TestCase):
         payload = json.loads(error.read().decode("utf-8"))
         self.assertEqual(error.code, 400)
         self.assertEqual(payload["error"], "invalid_distribution_filter")
+
+    def test_driver_tasks_route_returns_assigned_task_commands_and_reports(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/driver/tasks",
+            headers=DRIVER_AUTH_HEADERS,
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["count"], 1)
+        task = payload["tasks"][0]
+        self.assertEqual(task["taskId"], "task-demo-001")
+        self.assertEqual(task["driverUserId"], "driver-demo")
+        self.assertEqual(task["transportStatus"], "loaded")
+        self.assertEqual(task["commands"][0]["status"], "delivered")
+        self.assertEqual(task["summary"]["unconfirmedCommandCount"], 1)
+        self.assertEqual(task["statusReports"][0]["reportStatus"], "loaded")
+
+    def test_driver_command_acknowledge_and_status_report_routes_update_task(self) -> None:
+        acknowledge_request = Request(
+            f"{self.base_url}/api/driver/commands/cmd-demo-box-001/acknowledge",
+            data=b"{}",
+            headers={
+                **DRIVER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(acknowledge_request, timeout=3) as response:
+            acknowledged = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(acknowledged["command"]["status"], "acknowledged")
+        self.assertIn("confirmedAt", acknowledged["command"])
+
+        report_request = Request(
+            f"{self.base_url}/api/driver/tasks/task-demo-001/status-reports",
+            data=json.dumps(
+                {
+                    "reportStatus": "in_transit",
+                    "note": "Departed warehouse gate.",
+                    "attachmentUrls": ["https://example.com/pod/gate-photo.jpg"],
+                }
+            ).encode("utf-8"),
+            headers={
+                **DRIVER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(report_request, timeout=3) as response:
+            reported = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(reported["statusReport"]["reportStatus"], "in_transit")
+        self.assertEqual(reported["task"]["transportStatus"], "in_transit")
+        self.assertEqual(reported["task"]["summary"]["unconfirmedCommandCount"], 0)
+        self.assertEqual(reported["task"]["statusReports"][-1]["note"], "Departed warehouse gate.")
+
+    def test_driver_routes_reject_other_roles_and_other_drivers(self) -> None:
+        owner_request = Request(
+            f"{self.base_url}/api/driver/tasks",
+            headers=DEMO_AUTH_HEADERS,
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(owner_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "driver_access_denied")
+
+        other_driver_request = Request(
+            f"{self.base_url}/api/driver/commands/cmd-demo-box-001/acknowledge",
+            data=b"{}",
+            headers={
+                **DRIVER_AUTH_HEADERS,
+                "X-CargoFlow-User-Id": "driver-other",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(other_driver_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "driver_access_denied")
 
     def test_alert_log_route_filters_and_returns_chain_for_system_admin(self) -> None:
         request = Request(
