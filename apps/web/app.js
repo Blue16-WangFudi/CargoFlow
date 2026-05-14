@@ -12,10 +12,19 @@ const dispatcherAuthHeaders = {
   "X-CargoFlow-Dispatch-Region-Ids": "east-china",
 };
 
+const systemAdminAuthHeaders = {
+  "X-CargoFlow-User-Id": "admin-demo",
+  "X-CargoFlow-Role": "system_admin",
+  "X-CargoFlow-Tenant-Id": "cgf-demo",
+};
+
 const state = {
   alerts: [],
+  logs: [],
+  selectedLogId: null,
   selectedAlertId: null,
   statusFilter: "",
+  activeView: "dispatch",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -64,7 +73,7 @@ const requestJson = async (path, options = {}) => {
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
-      ...dispatcherAuthHeaders,
+      ...(options.authHeaders || dispatcherAuthHeaders),
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     },
@@ -74,6 +83,33 @@ const requestJson = async (path, options = {}) => {
     throw new Error(payload.message || `Request failed with ${response.status}`);
   }
   return payload;
+};
+
+const buildLogQuery = () => {
+  const params = new URLSearchParams();
+  [
+    ["type", $("log-type").value],
+    ["severity", $("log-severity").value],
+    ["status", $("log-status").value],
+    ["vehicleId", $("log-vehicle").value],
+    ["cargoId", $("log-cargo").value],
+    ["triggeredFrom", toIsoDateTime($("log-from").value)],
+    ["triggeredTo", toIsoDateTime($("log-to").value)],
+  ].forEach(([key, value]) => {
+    if (value && String(value).trim()) {
+      params.set(key, String(value).trim());
+    }
+  });
+  const query = params.toString();
+  return query ? `?${query}` : "";
+};
+
+const toIsoDateTime = (value) => {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
 };
 
 const loadAlerts = async () => {
@@ -96,6 +132,20 @@ const loadAlerts = async () => {
 const loadAlertDetail = async (alertId) => {
   const payload = await requestJson(`/api/alerts/${encodeURIComponent(alertId)}`);
   renderAlertDetail(payload.alert);
+};
+
+const loadLogs = async () => {
+  setStatus("Loading alert logs", "loading");
+  const payload = await requestJson(`/api/alert-logs${buildLogQuery()}`, {
+    authHeaders: systemAdminAuthHeaders,
+  });
+  state.logs = payload.logs || [];
+  if (!state.logs.some((log) => log.alertId === state.selectedLogId)) {
+    state.selectedLogId = state.logs[0]?.alertId || null;
+  }
+  renderLogs();
+  renderSelectedLogChain();
+  setStatus(`${payload.count} alert log${payload.count === 1 ? "" : "s"}`, "ok");
 };
 
 const renderAlertList = () => {
@@ -225,6 +275,141 @@ const renderCommands = (commands) => {
   });
 };
 
+const renderLogs = () => {
+  const table = $("log-table");
+  table.replaceChildren();
+  setText("log-count", `${state.logs.length} log${state.logs.length === 1 ? "" : "s"}`);
+  if (state.logs.length === 0) {
+    table.append(emptyMessage("No alert logs match these filters."));
+    return;
+  }
+
+  const header = createElement("div", "log-row log-header");
+  ["Alert", "Status", "Asset", "Triggered", "Chain"].forEach((label) => {
+    header.append(createElement("span", "", label));
+  });
+  table.append(header);
+
+  state.logs.forEach((log) => {
+    const row = document.createElement("button");
+    row.className = "log-row";
+    row.type = "button";
+    row.dataset.logId = log.alertId;
+    row.setAttribute("aria-pressed", String(log.alertId === state.selectedLogId));
+
+    const alertCell = createElement("span", "log-main");
+    alertCell.append(
+      createElement("strong", "", log.alertNumber),
+      createElement("small", "", titleCase(log.alertType)),
+    );
+
+    const statusCell = createElement("span", "log-status-cell");
+    statusCell.append(
+      createElement("span", `badge ${log.severity}`, titleCase(log.severity)),
+      createElement("span", `badge ${log.status}`, titleCase(log.status)),
+    );
+
+    const assetCell = createElement("span", "log-main");
+    assetCell.append(
+      createElement("strong", "", log.vehicleId),
+      createElement("small", "", log.cargoId),
+    );
+
+    const triggeredCell = createElement("span", "", formatDate(log.triggeredAt));
+    const chainCell = createElement(
+      "span",
+      "chain-count",
+      `${log.chain?.notificationCount || 0} notice / ${log.chain?.dispatchCommandCount || 0} command`,
+    );
+
+    row.append(alertCell, statusCell, assetCell, triggeredCell, chainCell);
+    row.addEventListener("click", () => {
+      state.selectedLogId = log.alertId;
+      renderLogs();
+      renderSelectedLogChain();
+    });
+    table.append(row);
+  });
+};
+
+const renderSelectedLogChain = () => {
+  const chain = $("chain-grid");
+  chain.replaceChildren();
+  const log = state.logs.find((item) => item.alertId === state.selectedLogId);
+  if (!log) {
+    setText("chain-summary", "Select a log");
+    chain.append(emptyMessage("Select an alert log to inspect notifications, commands, and closure audit."));
+    return;
+  }
+
+  setText(
+    "chain-summary",
+    `${log.alertNumber} · ${log.chain?.notificationCount || 0} notifications · ${log.chain?.dispatchCommandCount || 0} commands`,
+  );
+  chain.append(
+    chainSection(
+      "Notifications",
+      log.notifications || [],
+      (notification) =>
+        `${titleCase(notification.channel)} · ${titleCase(notification.status)} · ${formatDate(notification.sentAt)}`,
+      (notification) => `Recipient ${notification.recipientUserId} · ${notification.template}`,
+    ),
+    chainSection(
+      "Dispatch Commands",
+      log.dispatchCommands || [],
+      (command) =>
+        `${command.commandNumber} · ${titleCase(command.status)} · ${formatDate(command.issuedAt)}`,
+      (command) => `${titleCase(command.targetType)} ${command.targetId} · ${command.content}`,
+    ),
+    closureAuditSection(log),
+  );
+};
+
+const chainSection = (title, items, summaryFor, detailFor) => {
+  const section = createElement("article", "chain-section");
+  section.append(createElement("h4", "", title));
+  if (items.length === 0) {
+    section.append(emptyMessage(`No ${title.toLowerCase()} recorded.`));
+    return section;
+  }
+  items.forEach((item) => {
+    const node = createElement("div", "chain-node");
+    node.append(createElement("strong", "", summaryFor(item)), createElement("span", "", detailFor(item)));
+    section.append(node);
+  });
+  return section;
+};
+
+const closureAuditSection = (log) => {
+  const section = createElement("article", "chain-section");
+  section.append(createElement("h4", "", "Closure Audit"));
+  if (!log.chain?.hasClosedAudit) {
+    section.append(emptyMessage("No closure audit has been recorded."));
+    return section;
+  }
+  const node = createElement("div", "chain-node");
+  node.append(
+    createElement("strong", "", `${titleCase(log.status)} · ${formatDate(log.closedAt)}`),
+    createElement("span", "", `${log.closedByUserId || "-"} · ${log.closeReason || "-"}`),
+  );
+  section.append(node);
+  return section;
+};
+
+const exportLogs = async () => {
+  setStatus("Preparing export", "loading");
+  const payload = await requestJson(`/api/alert-logs/export${buildLogQuery()}`, {
+    authHeaders: systemAdminAuthHeaders,
+  });
+  $("export-panel").hidden = false;
+  setText(
+    "export-meta",
+    `${payload.export.fileName} · ${payload.count} log${payload.count === 1 ? "" : "s"}`,
+  );
+  $("export-preview").textContent = JSON.stringify(payload, null, 2);
+  setStatus("Export payload ready", "ok");
+};
+
 const emptyMessage = (message) => {
   const element = document.createElement("p");
   element.className = "empty-state";
@@ -271,7 +456,24 @@ const closeAlert = async (event) => {
 };
 
 const wireEvents = () => {
+  document.querySelectorAll(".mode-tab").forEach((button) => {
+    button.addEventListener("click", () => switchView(button.dataset.view));
+  });
   $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
+  $("refresh-logs").addEventListener("click", () => loadLogs().catch(handleError));
+  $("log-filter-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    state.selectedLogId = null;
+    $("export-panel").hidden = true;
+    loadLogs().catch(handleError);
+  });
+  $("reset-log-filters").addEventListener("click", () => {
+    $("log-filter-form").reset();
+    state.selectedLogId = null;
+    $("export-panel").hidden = true;
+    loadLogs().catch(handleError);
+  });
+  $("export-logs").addEventListener("click", () => exportLogs().catch(handleError));
   $("command-form").addEventListener("submit", (event) =>
     createCommand(event).catch(handleError),
   );
@@ -289,6 +491,19 @@ const wireEvents = () => {
       loadAlerts().catch(handleError);
     });
   });
+};
+
+const switchView = (view) => {
+  state.activeView = view || "dispatch";
+  document.querySelectorAll(".mode-tab").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === state.activeView);
+  });
+  document.querySelectorAll(".view-panel").forEach((panel) => {
+    panel.classList.toggle("is-active", panel.id === `${state.activeView}-view`);
+  });
+  if (state.activeView === "admin-logs" && state.logs.length === 0) {
+    loadLogs().catch(handleError);
+  }
 };
 
 const handleError = (error) => {
