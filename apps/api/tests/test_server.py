@@ -691,7 +691,7 @@ class HttpRouteTests(unittest.TestCase):
             listed = json.loads(response.read().decode("utf-8"))
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(listed["count"], 2)
+        self.assertEqual(listed["count"], 3)
 
         patch_request = Request(
             f"{self.base_url}/api/vehicles/vehicle-http-001",
