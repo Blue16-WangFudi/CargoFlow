@@ -12,6 +12,12 @@ const dispatcherAuthHeaders = {
   "X-CargoFlow-Dispatch-Region-Ids": "east-china",
 };
 
+const cargoOwnerAuthHeaders = {
+  "X-CargoFlow-User-Id": "owner-acme",
+  "X-CargoFlow-Role": "cargo_owner",
+  "X-CargoFlow-Tenant-Id": "cgf-demo",
+};
+
 const systemAdminAuthHeaders = {
   "X-CargoFlow-User-Id": "admin-demo",
   "X-CargoFlow-Role": "system_admin",
@@ -25,6 +31,13 @@ const state = {
   selectedAlertId: null,
   statusFilter: "",
   activeView: "dispatch",
+  shipper: {
+    shipmentId: "CGF-DEMO-001",
+    snapshot: null,
+    latest: null,
+    eta: null,
+    trajectory: null,
+  },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -67,6 +80,20 @@ const formatDate = (value) => {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+};
+
+const formatCoordinate = (location) => {
+  if (!location || location.longitude === undefined || location.latitude === undefined) {
+    return "-";
+  }
+  return `${Number(location.longitude).toFixed(4)}, ${Number(location.latitude).toFixed(4)}`;
+};
+
+const formatDistance = (value) => {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return `${value} km remaining`;
 };
 
 const requestJson = async (path, options = {}) => {
@@ -146,6 +173,34 @@ const loadLogs = async () => {
   renderLogs();
   renderSelectedLogChain();
   setStatus(`${payload.count} alert log${payload.count === 1 ? "" : "s"}`, "ok");
+};
+
+const loadShipperDetail = async () => {
+  setStatus("Loading cargo detail", "loading");
+  const snapshot = await requestJson("/api/shipments/demo", {
+    authHeaders: cargoOwnerAuthHeaders,
+  });
+  const shipmentId = snapshot.shipmentId || state.shipper.shipmentId;
+  const [latest, eta, trajectory] = await Promise.all([
+    requestJson(`/api/shipments/${encodeURIComponent(shipmentId)}/latest-location`, {
+      authHeaders: cargoOwnerAuthHeaders,
+    }),
+    requestJson(`/api/shipments/${encodeURIComponent(shipmentId)}/eta`, {
+      authHeaders: cargoOwnerAuthHeaders,
+    }),
+    requestJson(`/api/shipments/${encodeURIComponent(shipmentId)}/trajectory`, {
+      authHeaders: cargoOwnerAuthHeaders,
+    }),
+  ]);
+  state.shipper = {
+    shipmentId,
+    snapshot,
+    latest,
+    eta,
+    trajectory,
+  };
+  renderShipperDetail();
+  setStatus(`${shipmentId} cargo detail ready`, "ok");
 };
 
 const renderAlertList = () => {
@@ -332,6 +387,210 @@ const renderLogs = () => {
   });
 };
 
+const renderShipperDetail = () => {
+  const { snapshot, latest, eta, trajectory } = state.shipper;
+  if (!snapshot || !latest || !eta || !trajectory) {
+    renderEmptyShipperDetail();
+    return;
+  }
+
+  const cargo = snapshot.cargo || {};
+  const vehicle = latest.vehicle || trajectory.vehicle || snapshot.vehicle || {};
+  const location = latest.latestLocation;
+  const delay = latest.delayHint || {};
+  const etaPayload = eta.eta || {};
+  const points = trajectory.trajectory || [];
+  const alertPoints = points.filter((point) => point.kind === "alert");
+
+  setText("shipper-shipment-id", latest.shipmentId || snapshot.shipmentId || "-");
+  setText("shipper-cargo-label", latest.cargoId || snapshot.cargo?.id || "cargo-demo-001");
+  setText("shipper-cargo-owner", cargo.owner || "-");
+  setText("shipper-summary", `${titleCase(latest.transportStatus)} - ${vehicle.plateNumber || "-"}`);
+  setText("shipper-transport-status", titleCase(latest.transportStatus));
+  setText("shipper-vehicle-number", vehicle.vehicleNumber || "-");
+  setText("shipper-plate-number", vehicle.plateNumber || "-");
+  setText("shipper-device-id", vehicle.deviceId || "-");
+  setText("shipper-location-updated", formatDate(location?.updatedAt || location?.reportedAt));
+  setText("shipper-location-coordinate", formatCoordinate(location));
+  setText("shipper-eta-arrival", formatDate(etaPayload.estimatedArrival));
+  setText("shipper-eta-distance", formatDistance(etaPayload.remainingDistanceKm));
+  setText("shipper-delay-status", titleCase(delay.status));
+  setText("shipper-delay-message", delay.message || "-");
+  setText("shipper-location-state", location ? titleCase(delay.status || "tracked") : "Missing");
+  $("shipper-location-state").className = `badge ${location ? delay.status || "current" : "missing"}`;
+  setText("shipper-eta-status", titleCase(etaPayload.status));
+  setText("shipper-cargo-description", cargo.description || latest.cargoId || "-");
+  setText("shipper-destination", etaPayload.destination?.name || "-");
+  setText("shipper-driver", vehicle.driverUserId || snapshot.vehicle?.driver || "-");
+  setText("shipper-eta-calculated", formatDate(etaPayload.calculatedAt));
+
+  renderRouteCanvas(points, location, etaPayload.destination);
+  renderTrajectory(points);
+  renderShipperAlerts(alertPoints);
+};
+
+const renderEmptyShipperDetail = () => {
+  [
+    "shipper-transport-status",
+    "shipper-vehicle-number",
+    "shipper-plate-number",
+    "shipper-device-id",
+    "shipper-location-updated",
+    "shipper-location-coordinate",
+    "shipper-eta-arrival",
+    "shipper-eta-distance",
+    "shipper-delay-status",
+    "shipper-delay-message",
+    "shipper-location-state",
+    "shipper-eta-status",
+    "shipper-cargo-description",
+    "shipper-destination",
+    "shipper-driver",
+    "shipper-eta-calculated",
+  ].forEach((id) => setText(id, "-"));
+  $("route-canvas").replaceChildren(emptyMessage("Shipment route is not loaded."));
+  $("shipper-trajectory-list").replaceChildren(emptyMessage("No trajectory points loaded."));
+  $("shipper-alert-list").replaceChildren(emptyMessage("No alert entries loaded."));
+};
+
+const renderRouteCanvas = (points, latestLocation, destination) => {
+  const canvas = $("route-canvas");
+  canvas.replaceChildren();
+  const track = createElement("div", "route-track");
+  const routePoints = [
+    points.find((point) => point.kind === "start"),
+    latestLocation ? { ...latestLocation, kind: "current" } : null,
+    destination ? { ...destination, kind: "end" } : points.find((point) => point.kind === "end"),
+  ].filter(Boolean);
+
+  if (routePoints.length === 0) {
+    canvas.append(emptyMessage("No route coordinates are available."));
+    return;
+  }
+
+  routePoints.forEach((point, index) => {
+    const node = createElement("div", `route-node ${point.kind}`);
+    node.style.left = `${routePoints.length === 1 ? 50 : (index / (routePoints.length - 1)) * 100}%`;
+    node.append(
+      createElement("span", "route-pin", ""),
+      createElement("strong", "", titleCase(point.kind)),
+      createElement("small", "", point.name || formatCoordinate(point)),
+    );
+    track.append(node);
+  });
+
+  const alertCount = points.filter((point) => point.kind === "alert").length;
+  if (alertCount > 0) {
+    const alertNode = createElement("div", "route-node alert");
+    alertNode.style.left = "58%";
+    alertNode.append(
+      createElement("span", "route-pin", ""),
+      createElement("strong", "", `${alertCount} Alert${alertCount === 1 ? "" : "s"}`),
+      createElement("small", "", "Key node"),
+    );
+    track.append(alertNode);
+  }
+
+  canvas.append(track);
+};
+
+const renderTrajectory = (points) => {
+  const list = $("shipper-trajectory-list");
+  list.replaceChildren();
+  setText("shipper-trajectory-count", `${points.length} point${points.length === 1 ? "" : "s"}`);
+  if (points.length === 0) {
+    list.append(emptyMessage("No trajectory points are available."));
+    return;
+  }
+
+  points.forEach((point) => {
+    const item = createElement("article", `trajectory-item ${point.kind}`);
+    const badge = createElement("span", `badge ${trajectoryBadgeClass(point)}`, titleCase(point.kind));
+    const content = createElement("div", "trajectory-content");
+    content.append(
+      createElement("strong", "", trajectoryTitle(point)),
+      createElement("span", "", trajectoryDetail(point)),
+    );
+    item.append(badge, content, createElement("time", "", formatDate(point.occurredAt || point.reportedAt)));
+    list.append(item);
+  });
+};
+
+const trajectoryBadgeClass = (point) => {
+  if (point.kind === "alert") {
+    return point.severity || "high";
+  }
+  if (point.kind === "status_report") {
+    return "acknowledged";
+  }
+  return point.kind;
+};
+
+const trajectoryTitle = (point) => {
+  if (point.kind === "alert") {
+    return `${titleCase(point.alertType)} - ${titleCase(point.status)}`;
+  }
+  if (point.kind === "status_report") {
+    return titleCase(point.reportStatus);
+  }
+  if (point.kind === "gps") {
+    return point.eventId || "GPS point";
+  }
+  return point.name || titleCase(point.kind);
+};
+
+const trajectoryDetail = (point) => {
+  if (point.kind === "status_report") {
+    return `Reporter ${point.reporterUserId}`;
+  }
+  if (point.kind === "alert") {
+    return point.alertId || "Alert key node";
+  }
+  if (point.longitude !== undefined && point.latitude !== undefined) {
+    return formatCoordinate(point);
+  }
+  return point.isKeyNode ? "Key route node" : "-";
+};
+
+const renderShipperAlerts = (alertPoints) => {
+  const list = $("shipper-alert-list");
+  list.replaceChildren();
+  setText("shipper-alert-count", `${alertPoints.length} alert${alertPoints.length === 1 ? "" : "s"}`);
+  if (alertPoints.length === 0) {
+    list.append(emptyMessage("No alert nodes are attached to this cargo trajectory."));
+    return;
+  }
+
+  alertPoints.forEach((alert) => {
+    const item = createElement("article", "shipper-alert-item");
+    const main = createElement("div", "shipper-alert-main");
+    main.append(
+      createElement("span", `badge ${alert.severity || "high"}`, titleCase(alert.severity || "alert")),
+      createElement("strong", "", titleCase(alert.alertType)),
+      createElement("small", "", `${titleCase(alert.status)} - ${formatDate(alert.occurredAt)}`),
+    );
+    const action = createElement("button", "neutral-button compact-button", "Open");
+    action.type = "button";
+    action.addEventListener("click", () => openAlertEntry(alert.alertId));
+    item.append(main, action);
+    list.append(item);
+  });
+};
+
+const openAlertEntry = async (alertId) => {
+  if (!alertId) {
+    return;
+  }
+  switchView("dispatch");
+  state.statusFilter = "";
+  document.querySelectorAll(".filter-button").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.status === "");
+  });
+  state.selectedAlertId = alertId;
+  await loadAlerts();
+  $("dispatch-view").scrollIntoView({ block: "start", behavior: "auto" });
+};
+
 const renderSelectedLogChain = () => {
   const chain = $("chain-grid");
   chain.replaceChildren();
@@ -461,6 +720,13 @@ const wireEvents = () => {
   });
   $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
   $("refresh-logs").addEventListener("click", () => loadLogs().catch(handleError));
+  $("refresh-shipper").addEventListener("click", () => loadShipperDetail().catch(handleError));
+  $("show-trajectory").addEventListener("click", () => {
+    $("shipper-trajectory-section").scrollIntoView({ block: "start", behavior: "smooth" });
+  });
+  $("show-alerts").addEventListener("click", () => {
+    $("shipper-alerts-section").scrollIntoView({ block: "start", behavior: "smooth" });
+  });
   $("log-filter-form").addEventListener("submit", (event) => {
     event.preventDefault();
     state.selectedLogId = null;
@@ -503,6 +769,11 @@ const switchView = (view) => {
   });
   if (state.activeView === "admin-logs" && state.logs.length === 0) {
     loadLogs().catch(handleError);
+  }
+  if (state.activeView === "shipper" && !state.shipper.snapshot) {
+    loadShipperDetail().catch(handleError);
+  } else if (state.activeView === "shipper" && state.shipper.snapshot) {
+    setStatus(`${state.shipper.shipmentId} cargo detail ready`, "ok");
   }
 };
 

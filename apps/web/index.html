@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CargoFlow Alert Control Console</title>
+    <title>CargoFlow Operations Console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -12,16 +12,140 @@
       <section class="topbar" aria-labelledby="page-title">
         <div>
           <p class="eyebrow">CargoFlow Operations</p>
-          <h1 id="page-title">Alert Control Console</h1>
+          <h1 id="page-title">Operations Console</h1>
         </div>
         <nav class="mode-tabs" aria-label="Workspace views">
           <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch</button>
           <button class="mode-tab" type="button" data-view="admin-logs">Admin Logs</button>
+          <button class="mode-tab" type="button" data-view="shipper">Shipper Detail</button>
         </nav>
         <div class="service-status" id="service-status" data-state="loading">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="status-label">Checking API</span>
         </div>
+      </section>
+
+      <section class="shipper-workspace view-panel" id="shipper-view" aria-label="Shipper cargo detail">
+        <aside class="queue-panel" aria-labelledby="shipper-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Cargo Owner</p>
+              <h2 id="shipper-title">Cargo Detail</h2>
+            </div>
+            <button class="icon-button" id="refresh-shipper" type="button" title="Refresh shipment" aria-label="Refresh shipment">
+              &#8635;
+            </button>
+          </div>
+
+          <div class="shipment-card" aria-live="polite">
+            <span class="shipment-number" id="shipper-shipment-id">CGF-DEMO-001</span>
+            <strong id="shipper-cargo-label">cargo-demo-001</strong>
+            <span id="shipper-cargo-owner">Acme Export</span>
+          </div>
+
+          <div class="quick-actions" aria-label="Cargo detail shortcuts">
+            <button class="primary-button" id="show-trajectory" type="button">Trajectory</button>
+            <button class="neutral-button" id="show-alerts" type="button">Alerts</button>
+          </div>
+
+          <dl class="info-list compact-list">
+            <div>
+              <dt>Transport</dt>
+              <dd id="shipper-transport-status">-</dd>
+            </div>
+            <div>
+              <dt>Vehicle</dt>
+              <dd id="shipper-vehicle-number">-</dd>
+            </div>
+            <div>
+              <dt>Plate</dt>
+              <dd id="shipper-plate-number">-</dd>
+            </div>
+            <div>
+              <dt>Device</dt>
+              <dd id="shipper-device-id">-</dd>
+            </div>
+          </dl>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="shipper-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Shipment Snapshot</p>
+              <h2 id="shipper-detail-title">Live Cargo Status</h2>
+            </div>
+            <div class="alert-summary" id="shipper-summary">Waiting for shipment data</div>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric-card">
+              <span>Location Update</span>
+              <strong id="shipper-location-updated">-</strong>
+              <small id="shipper-location-coordinate">-</small>
+            </article>
+            <article class="metric-card">
+              <span>ETA</span>
+              <strong id="shipper-eta-arrival">-</strong>
+              <small id="shipper-eta-distance">-</small>
+            </article>
+            <article class="metric-card">
+              <span>Delay Hint</span>
+              <strong id="shipper-delay-status">-</strong>
+              <small id="shipper-delay-message">-</small>
+            </article>
+          </div>
+
+          <div class="shipper-detail-grid">
+            <article class="info-panel route-panel" aria-labelledby="route-title">
+              <div class="section-header compact">
+                <h3 id="route-title">Route Position</h3>
+                <span class="badge" id="shipper-location-state">-</span>
+              </div>
+              <div class="route-canvas" id="route-canvas" aria-label="Cargo route overview"></div>
+            </article>
+
+            <article class="info-panel">
+              <div class="section-header compact">
+                <h3>Cargo & ETA</h3>
+                <span class="hint" id="shipper-eta-status">-</span>
+              </div>
+              <dl class="info-list">
+                <div>
+                  <dt>Cargo</dt>
+                  <dd id="shipper-cargo-description">-</dd>
+                </div>
+                <div>
+                  <dt>Destination</dt>
+                  <dd id="shipper-destination">-</dd>
+                </div>
+                <div>
+                  <dt>Driver</dt>
+                  <dd id="shipper-driver">-</dd>
+                </div>
+                <div>
+                  <dt>Calculated</dt>
+                  <dd id="shipper-eta-calculated">-</dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+
+          <section class="info-panel trajectory-panel" id="shipper-trajectory-section" aria-labelledby="shipper-trajectory-title">
+            <div class="section-header compact">
+              <h3 id="shipper-trajectory-title">Trajectory Replay</h3>
+              <span id="shipper-trajectory-count" class="hint">0 points</span>
+            </div>
+            <div class="trajectory-list" id="shipper-trajectory-list"></div>
+          </section>
+
+          <section class="info-panel shipper-alert-panel" id="shipper-alerts-section" aria-labelledby="shipper-alerts-title">
+            <div class="section-header compact">
+              <h3 id="shipper-alerts-title">Alert Entry</h3>
+              <span id="shipper-alert-count" class="hint">0 alerts</span>
+            </div>
+            <div class="shipper-alert-list" id="shipper-alert-list"></div>
+          </section>
+        </section>
       </section>
 
       <section class="workspace view-panel is-active" id="dispatch-view" aria-label="Dispatch alert workspace">
