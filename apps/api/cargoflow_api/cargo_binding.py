@@ -312,6 +312,15 @@ class CargoBindingStore:
                 created=created,
             )
 
+    def cargo_for(self, cargo_id: str) -> Cargo | None:
+        with self._lock:
+            record = self._cargos.get(cargo_id)
+        return record.cargo if record is not None else None
+
+    def task_for(self, task_id: str) -> TransportTask | None:
+        with self._lock:
+            return self._tasks.get(task_id)
+
     def _cargo_for(self, cargo_id: str) -> CargoBindingCargo:
         try:
             return self._cargos[cargo_id]

@@ -53,6 +53,7 @@ Default URLs:
 - Demo ETA API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/eta
 - Demo trajectory replay API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/trajectory
 - Demo dispatcher vehicle distribution API: http://127.0.0.1:8000/api/dispatch/vehicle-distribution
+- Demo Q&A ask API: http://127.0.0.1:8000/api/qa/ask
 - Frontend console: http://127.0.0.1:5173
 
 Ports can be changed with environment variables:
@@ -138,6 +139,14 @@ startup and check commands.
   points, online and transport states, bound cargo context, and active alert
   summaries; the development endpoint supports `status=online`,
   `status=in_transit`, and `status=alert` filters.
+- `POST /api/qa/ask`, `GET /api/qa/records`,
+  `GET /api/qa/records/{recordId}`, and
+  `POST /api/qa/records/{recordId}/feedback` provide the current intelligent
+  Q&A contract. The development service records every question, answer,
+  citation, session, authorization summary, and feedback value; answers are
+  deterministic until a model-backed retrieval layer is wired. Business-context
+  answers first pass through the role-scoped Q&A context filter, and unanswered
+  or unauthorized requests are recorded with a failure reason.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).

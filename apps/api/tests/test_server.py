@@ -25,6 +25,7 @@ from cargoflow_api.alert_rules import AlertRuleStore
 from cargoflow_api.cargo_binding import CargoBindingStore
 from cargoflow_api.dispatch_distribution import DispatchDistributionStore
 from cargoflow_api.location_ingest import DeviceEventStore
+from cargoflow_api.qa_service import QaService
 from cargoflow_api.shipment_tracking import ShipmentTrackingStore
 from cargoflow_api.vehicle_management import VehicleStore
 
@@ -145,6 +146,9 @@ class HttpRouteTests(unittest.TestCase):
         server_module.SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
         server_module.CARGO_BINDINGS = CargoBindingStore.demo()
         server_module.DISPATCH_DISTRIBUTION = DispatchDistributionStore.demo()
+        server_module.QA_SERVICE = QaService(
+            context_filter=server_module.build_demo_business_context_filter()
+        )
 
     def test_health_route(self) -> None:
         with urlopen(f"{self.base_url}/health", timeout=3) as response:
@@ -701,6 +705,128 @@ class HttpRouteTests(unittest.TestCase):
         payload = json.loads(error.read().decode("utf-8"))
         self.assertEqual(error.code, 403)
         self.assertEqual(payload["error"], "alert_access_denied")
+
+    def test_qa_ask_creates_record_with_sources_and_business_refs(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/qa/ask",
+            data=json.dumps(
+                {
+                    "question": "我的货物现在有哪些运输记录？",
+                    "sessionId": "session-http-qa",
+                    "requestedIds": ["CGF-DEMO-001"],
+                }
+            ).encode("utf-8"),
+            headers={
+                **DEMO_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            answer = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertTrue(answer["recordId"].startswith("qa-"))
+        self.assertIn("已按你的权限找到", answer["answer"])
+        self.assertGreaterEqual(len(answer["businessRefs"]), 1)
+        self.assertEqual(answer["authorization"]["principal"]["role"], "cargo_owner")
+        self.assertEqual(answer["sessionId"], "session-http-qa")
+        self.assertIsNotNone(answer["answeredAt"])
+
+        list_request = Request(
+            f"{self.base_url}/api/qa/records?sessionId=session-http-qa",
+            headers=DEMO_AUTH_HEADERS,
+        )
+        with urlopen(list_request, timeout=3) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["records"][0]["recordId"], answer["recordId"])
+
+    def test_qa_ask_returns_rule_answer_with_knowledge_source(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/qa/ask",
+            data=json.dumps({"question": "偏航告警怎么判定？"}).encode("utf-8"),
+            headers={
+                **DEMO_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            answer = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(answer["confidence"], "high")
+        self.assertEqual(answer["sources"][0]["type"], "knowledge_doc")
+        self.assertEqual(answer["sources"][0]["section"], "FR-04 异常报警")
+
+    def test_qa_records_feedback_and_scope_are_user_limited(self) -> None:
+        create_request = Request(
+            f"{self.base_url}/api/qa/ask",
+            data=json.dumps({"question": "司机如何确认调度指令？"}).encode("utf-8"),
+            headers={
+                **DEMO_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(create_request, timeout=3) as response:
+            created = json.loads(response.read().decode("utf-8"))
+
+        feedback_request = Request(
+            f"{self.base_url}/api/qa/records/{created['recordId']}/feedback",
+            data=json.dumps({"feedback": "helpful"}).encode("utf-8"),
+            headers={
+                **DEMO_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(feedback_request, timeout=3) as response:
+            updated = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(updated["record"]["feedback"], "helpful")
+
+        other_user_request = Request(
+            f"{self.base_url}/api/qa/records/{created['recordId']}",
+            headers={**DEMO_AUTH_HEADERS, "X-CargoFlow-User-Id": "owner-other"},
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(other_user_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "qa_access_denied")
+
+    def test_qa_ask_refuses_unauthorized_business_context(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/qa/ask",
+            data=json.dumps(
+                {
+                    "question": "帮我看看别人的货物",
+                    "requestedIds": ["CGF-PENDING-001"],
+                }
+            ).encode("utf-8"),
+            headers={
+                **DEMO_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            answer = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(answer["failureReason"], "unauthorized_business_context")
+        self.assertEqual(answer["businessRefs"], [])
+        self.assertIn("不能查看", answer["answer"])
 
     def test_device_event_route_rejects_unknown_device(self) -> None:
         request = Request(
