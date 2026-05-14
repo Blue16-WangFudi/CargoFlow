@@ -1,18 +1,26 @@
+const navigation = window.CargoFlowNavigation;
+const urlParams = new URLSearchParams(window.location.search);
 const apiBase =
-  new URLSearchParams(window.location.search).get("api") ||
+  urlParams.get("api") ||
   window.localStorage.getItem("cargoflowApiBase") ||
   "http://127.0.0.1:8000";
 
 window.localStorage.setItem("cargoflowApiBase", apiBase);
 
-const dispatcherAuthHeaders = {
-  "X-CargoFlow-User-Id": "dispatcher-demo",
-  "X-CargoFlow-Role": "dispatcher",
-  "X-CargoFlow-Tenant-Id": "cgf-demo",
-  "X-CargoFlow-Dispatch-Region-Ids": "east-china",
-};
+const initialRole =
+  urlParams.get("role") ||
+  window.localStorage.getItem("cargoflowRole") ||
+  "dispatcher";
+
+const initialEntryId =
+  urlParams.get("entry") ||
+  window.localStorage.getItem("cargoflowEntry") ||
+  navigation.defaultEntryForRole(initialRole)?.id ||
+  "";
 
 const state = {
+  role: initialRole,
+  entryId: initialEntryId,
   alerts: [],
   selectedAlertId: null,
   statusFilter: "",
@@ -28,6 +36,10 @@ const setStatus = (label, status) => {
   const serviceStatus = $("service-status");
   serviceStatus.dataset.state = status;
   setText("status-label", label);
+};
+
+const show = (id, visible) => {
+  $(id).hidden = !visible;
 };
 
 const createElement = (tagName, className, textContent) => {
@@ -64,7 +76,7 @@ const requestJson = async (path, options = {}) => {
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
-      ...dispatcherAuthHeaders,
+      ...navigation.authHeadersForRole(state.role),
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     },
@@ -74,6 +86,168 @@ const requestJson = async (path, options = {}) => {
     throw new Error(payload.message || `Request failed with ${response.status}`);
   }
   return payload;
+};
+
+const persistWorkspace = () => {
+  window.localStorage.setItem("cargoflowRole", state.role);
+  window.localStorage.setItem("cargoflowEntry", state.entryId);
+};
+
+const renderRoleOptions = () => {
+  const select = $("role-select");
+  select.replaceChildren();
+  navigation.roleOrder.forEach((role) => {
+    const profile = navigation.roleProfiles[role];
+    const option = document.createElement("option");
+    option.value = role;
+    option.textContent = profile.label;
+    option.selected = role === state.role;
+    select.append(option);
+  });
+};
+
+const renderRoleProfile = () => {
+  const profile = navigation.roleProfiles[state.role];
+  const container = $("role-profile");
+  container.replaceChildren();
+  if (!profile) {
+    container.append(emptyMessage("Unknown role. Choose an authorized CargoFlow role."));
+    return;
+  }
+
+  container.append(
+    createElement("span", "badge", profile.shortLabel),
+    createElement("p", "", profile.description),
+  );
+};
+
+const renderEntryList = (allowedEntries) => {
+  const list = $("entry-list");
+  list.replaceChildren();
+  if (allowedEntries.length === 0) {
+    list.append(emptyMessage("No entries are assigned to this role."));
+    return;
+  }
+
+  allowedEntries.forEach((entry) => {
+    const button = document.createElement("button");
+    button.className = "entry-card";
+    button.type = "button";
+    button.dataset.entryId = entry.id;
+    button.setAttribute("aria-current", String(entry.id === state.entryId));
+    button.append(
+      createElement("span", "entry-card-eyebrow", entry.eyebrow),
+      createElement("strong", "", entry.label),
+      createElement("span", "entry-card-meta", entry.status),
+    );
+    button.addEventListener("click", () => {
+      state.entryId = entry.id;
+      state.selectedAlertId = null;
+      persistWorkspace();
+      renderWorkspace().catch(handleError);
+    });
+    list.append(button);
+  });
+};
+
+const renderEntryOverview = (entry) => {
+  const overview = $("entry-overview");
+  overview.replaceChildren();
+  if (!entry) {
+    return;
+  }
+
+  const summary = createElement("article", "info-panel entry-summary");
+  summary.append(
+    createElement("span", "badge", entry.status),
+    createElement("h3", "", entry.label),
+    createElement("p", "", entry.summary),
+  );
+
+  const endpoint = createElement("dl", "info-list");
+  const endpointGroup = document.createElement("div");
+  endpointGroup.append(
+    createElement("dt", "", "API Contract"),
+    createElement("dd", "", entry.endpoint),
+  );
+  const roleGroup = document.createElement("div");
+  roleGroup.append(
+    createElement("dt", "", "Visible To"),
+    createElement(
+      "dd",
+      "",
+      entry.roles.map((role) => navigation.roleProfiles[role].label).join(", "),
+    ),
+  );
+  endpoint.append(endpointGroup, roleGroup);
+
+  overview.append(summary, endpoint);
+};
+
+const renderDenied = (resolution) => {
+  show("access-denied", true);
+  renderEntryOverview(null);
+  setText("detail-eyebrow", "Permission Boundary");
+  setText("detail-title", "Unauthorized Entry");
+  setText("alert-summary", navigation.roleProfiles[state.role]?.label || "Unknown role");
+  const requested = resolution.entry?.label || state.entryId || "requested entry";
+  if (resolution.reason === "unknown_role") {
+    setText("denied-title", "Unknown role");
+    setText("denied-message", "Choose a CargoFlow role before opening a workspace entry.");
+  } else {
+    setText("denied-title", `${requested} is not available`);
+    setText(
+      "denied-message",
+      `${navigation.roleProfiles[state.role].label} can only open the entries listed in the navigation panel.`,
+    );
+  }
+  renderAlertShell(false);
+  setStatus("Entry denied by role rules", "error");
+};
+
+const renderAllowedEntry = async (entry) => {
+  show("access-denied", false);
+  setText("detail-eyebrow", entry.eyebrow);
+  setText("detail-title", entry.label);
+  setText("alert-summary", navigation.roleProfiles[state.role].label);
+  renderEntryOverview(entry);
+  renderAlertShell(entry.id === "dispatch-alerts");
+
+  if (entry.id === "dispatch-alerts") {
+    await loadAlerts();
+    return;
+  }
+
+  setStatus(`${entry.label} visible for ${navigation.roleProfiles[state.role].shortLabel}`, "ok");
+};
+
+const renderAlertShell = (visible) => {
+  show("dispatch-workspace", visible);
+  show("alert-detail-grid", visible);
+  show("alert-workflow", visible);
+  show("command-panel", visible);
+  if (!visible) {
+    state.alerts = [];
+    state.selectedAlertId = null;
+    $("alert-list").replaceChildren();
+    renderEmptyDetail();
+  }
+};
+
+const renderWorkspace = async () => {
+  renderRoleOptions();
+  renderRoleProfile();
+  const resolution = navigation.resolveWorkspaceEntry(state.role, state.entryId);
+  renderEntryList(resolution.allowedEntries);
+  if (!resolution.authorized) {
+    renderDenied(resolution);
+    return;
+  }
+
+  state.entryId = resolution.entry?.id || "";
+  persistWorkspace();
+  renderEntryList(resolution.allowedEntries);
+  await renderAllowedEntry(resolution.entry);
 };
 
 const loadAlerts = async () => {
@@ -102,10 +276,7 @@ const renderAlertList = () => {
   const list = $("alert-list");
   list.replaceChildren();
   if (state.alerts.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "empty-state";
-    empty.textContent = "No scoped alerts match this filter.";
-    list.append(empty);
+    list.append(emptyMessage("No scoped alerts match this filter."));
     return;
   }
 
@@ -124,11 +295,11 @@ const renderAlertList = () => {
 
     const meta = document.createElement("span");
     meta.className = "alert-card-meta";
-    meta.textContent = `${titleCase(alert.alertType)} · ${alert.vehicleId}`;
+    meta.textContent = `${titleCase(alert.alertType)} - ${alert.vehicleId}`;
 
     const foot = document.createElement("span");
     foot.className = "alert-card-foot";
-    foot.textContent = `${titleCase(alert.status)} · ${formatDate(alert.triggeredAt)}`;
+    foot.textContent = `${titleCase(alert.status)} - ${formatDate(alert.triggeredAt)}`;
 
     button.append(top, meta, foot);
     button.addEventListener("click", async () => {
@@ -142,7 +313,7 @@ const renderAlertList = () => {
 
 const renderAlertDetail = (alert) => {
   state.selectedAlertId = alert.alertId;
-  setText("alert-summary", `${alert.alertNumber} · ${titleCase(alert.alertType)}`);
+  setText("alert-summary", `${alert.alertNumber} - ${titleCase(alert.alertType)}`);
   setText("alert-status", titleCase(alert.status));
   $("alert-status").className = `badge ${alert.status}`;
   setText("alert-number", alert.alertNumber);
@@ -159,7 +330,6 @@ const renderAlertDetail = (alert) => {
 };
 
 const renderEmptyDetail = () => {
-  setText("alert-summary", "No alert selected");
   setText("alert-status", "-");
   setText("alert-number", "-");
   setText("alert-severity", "-");
@@ -234,7 +404,7 @@ const emptyMessage = (message) => {
 
 const createCommand = async (event) => {
   event.preventDefault();
-  if (!state.selectedAlertId) {
+  if (!state.selectedAlertId || state.entryId !== "dispatch-alerts") {
     return;
   }
   setStatus("Sending command", "loading");
@@ -257,7 +427,7 @@ const createCommand = async (event) => {
 
 const closeAlert = async (event) => {
   event.preventDefault();
-  if (!state.selectedAlertId) {
+  if (!state.selectedAlertId || state.entryId !== "dispatch-alerts") {
     return;
   }
   setStatus("Closing alert", "loading");
@@ -271,7 +441,14 @@ const closeAlert = async (event) => {
 };
 
 const wireEvents = () => {
-  $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
+  $("refresh-workspace").addEventListener("click", () => renderWorkspace().catch(handleError));
+  $("role-select").addEventListener("change", (event) => {
+    state.role = event.target.value;
+    state.entryId = navigation.defaultEntryForRole(state.role)?.id || "";
+    state.selectedAlertId = null;
+    persistWorkspace();
+    renderWorkspace().catch(handleError);
+  });
   $("command-form").addEventListener("submit", (event) =>
     createCommand(event).catch(handleError),
   );
@@ -296,4 +473,4 @@ const handleError = (error) => {
 };
 
 wireEvents();
-loadAlerts().catch(handleError);
+renderWorkspace().catch(handleError);

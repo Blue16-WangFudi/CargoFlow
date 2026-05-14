@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CargoFlow Dispatch Console</title>
+    <title>CargoFlow Operations Console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -11,44 +11,71 @@
     <main class="shell">
       <section class="topbar" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">CargoFlow Dispatch</p>
-          <h1 id="page-title">Alert Command Desk</h1>
+          <p class="eyebrow">CargoFlow Operations</p>
+          <h1 id="page-title">Role Workspace</h1>
         </div>
-        <div class="service-status" id="service-status" data-state="loading">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span id="status-label">Checking API</span>
+        <div class="topbar-actions">
+          <label class="role-picker">
+            <span>Role</span>
+            <select id="role-select" name="role"></select>
+          </label>
+          <div class="service-status" id="service-status" data-state="loading">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="status-label">Checking API</span>
+          </div>
         </div>
       </section>
 
-      <section class="workspace" aria-label="Dispatch alert workspace">
+      <section class="workspace" aria-label="Role workspace">
         <aside class="queue-panel" aria-labelledby="queue-title">
           <div class="section-header">
             <div>
-              <p class="eyebrow">Queue</p>
-              <h2 id="queue-title">Open Alerts</h2>
+              <p class="eyebrow">Navigation</p>
+              <h2 id="queue-title">Authorized Entries</h2>
             </div>
-            <button class="icon-button" id="refresh-alerts" type="button" title="Refresh alerts" aria-label="Refresh alerts">
+            <button class="icon-button" id="refresh-workspace" type="button" title="Refresh workspace" aria-label="Refresh workspace">
               &#8635;
             </button>
           </div>
-          <div class="filter-row" role="group" aria-label="Alert status filter">
-            <button class="filter-button is-active" type="button" data-status="">All</button>
-            <button class="filter-button" type="button" data-status="pending">Pending</button>
-            <button class="filter-button" type="button" data-status="processing">Processing</button>
-          </div>
-          <div class="alert-list" id="alert-list" aria-live="polite"></div>
+          <div class="role-profile" id="role-profile"></div>
+          <nav class="entry-list" id="entry-list" aria-label="Workspace entries"></nav>
         </aside>
 
         <section class="detail-panel" aria-labelledby="detail-title">
           <div class="section-header detail-header">
             <div>
-              <p class="eyebrow">Selected Alert</p>
-              <h2 id="detail-title">Alert Details</h2>
+              <p class="eyebrow" id="detail-eyebrow">Workspace</p>
+              <h2 id="detail-title">Entry Details</h2>
             </div>
-            <div class="alert-summary" id="alert-summary">No alert selected</div>
+            <div class="alert-summary" id="alert-summary">No entry selected</div>
           </div>
 
-          <div class="detail-grid">
+          <section class="access-panel" id="access-denied" aria-live="polite" hidden>
+            <div>
+              <p class="eyebrow">Access Denied</p>
+              <h3 id="denied-title">Entry is unavailable</h3>
+            </div>
+            <p id="denied-message"></p>
+          </section>
+
+          <section class="entry-overview" id="entry-overview" aria-label="Selected entry overview"></section>
+
+          <section class="dispatch-only" id="dispatch-workspace" aria-label="Dispatch alert workspace" hidden>
+            <div class="section-header subsection-header">
+              <div>
+                <p class="eyebrow">Queue</p>
+                <h3>Open Alerts</h3>
+              </div>
+              <div class="filter-row" role="group" aria-label="Alert status filter">
+                <button class="filter-button is-active" type="button" data-status="">All</button>
+                <button class="filter-button" type="button" data-status="pending">Pending</button>
+                <button class="filter-button" type="button" data-status="processing">Processing</button>
+              </div>
+            </div>
+            <div class="alert-list" id="alert-list" aria-live="polite"></div>
+          </section>
+
+          <div class="detail-grid" id="alert-detail-grid" hidden>
             <article class="info-panel">
               <div class="section-header compact">
                 <h3>Incident</h3>
@@ -90,7 +117,7 @@
             </article>
           </div>
 
-          <section class="workflow-grid" aria-label="Command and closure workflow">
+          <section class="workflow-grid" id="alert-workflow" aria-label="Command and closure workflow" hidden>
             <form class="info-panel form-panel" id="command-form">
               <div class="section-header compact">
                 <h3>Create Command</h3>
@@ -120,7 +147,7 @@
             </form>
           </section>
 
-          <section class="info-panel command-panel" aria-labelledby="command-title">
+          <section class="info-panel command-panel" id="command-panel" aria-labelledby="command-title" hidden>
             <div class="section-header compact">
               <h3 id="command-title">Command Status</h3>
               <span id="command-count" class="hint">0 commands</span>
@@ -130,6 +157,7 @@
         </section>
       </section>
     </main>
+    <script src="./navigation-rules.js"></script>
     <script src="./app.js" defer></script>
   </body>
 </html>
