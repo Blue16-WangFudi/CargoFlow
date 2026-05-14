@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CargoFlow Dispatch Console</title>
+    <title>CargoFlow Alert Control Console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -11,16 +11,20 @@
     <main class="shell">
       <section class="topbar" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">CargoFlow Dispatch</p>
-          <h1 id="page-title">Alert Command Desk</h1>
+          <p class="eyebrow">CargoFlow Operations</p>
+          <h1 id="page-title">Alert Control Console</h1>
         </div>
+        <nav class="mode-tabs" aria-label="Workspace views">
+          <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch</button>
+          <button class="mode-tab" type="button" data-view="admin-logs">Admin Logs</button>
+        </nav>
         <div class="service-status" id="service-status" data-state="loading">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="status-label">Checking API</span>
         </div>
       </section>
 
-      <section class="workspace" aria-label="Dispatch alert workspace">
+      <section class="workspace view-panel is-active" id="dispatch-view" aria-label="Dispatch alert workspace">
         <aside class="queue-panel" aria-labelledby="queue-title">
           <div class="section-header">
             <div>
@@ -126,6 +130,101 @@
               <span id="command-count" class="hint">0 commands</span>
             </div>
             <div class="command-list" id="command-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section class="admin-workspace view-panel" id="admin-logs-view" aria-label="System admin alert logs">
+        <aside class="queue-panel" aria-labelledby="log-filter-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">System Admin</p>
+              <h2 id="log-filter-title">Alert Logs</h2>
+            </div>
+            <button class="icon-button" id="refresh-logs" type="button" title="Refresh logs" aria-label="Refresh logs">
+              &#8635;
+            </button>
+          </div>
+          <form class="filter-form" id="log-filter-form">
+            <label>
+              Alert type
+              <select id="log-type" name="type">
+                <option value="">All types</option>
+                <option value="route_deviation">Route deviation</option>
+                <option value="abnormal_stop">Abnormal stop</option>
+                <option value="box_opened">Box opened</option>
+              </select>
+            </label>
+            <label>
+              Severity
+              <select id="log-severity" name="severity">
+                <option value="">All severities</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label>
+              Status
+              <select id="log-status" name="status">
+                <option value="">All statuses</option>
+                <option value="pending">Pending</option>
+                <option value="processing">Processing</option>
+                <option value="closed">Closed</option>
+                <option value="false_positive">False positive</option>
+              </select>
+            </label>
+            <label>
+              Vehicle ID
+              <input id="log-vehicle" name="vehicleId" type="text" autocomplete="off" placeholder="vehicle-demo-001" />
+            </label>
+            <label>
+              Cargo ID
+              <input id="log-cargo" name="cargoId" type="text" autocomplete="off" placeholder="cargo-demo-001" />
+            </label>
+            <label>
+              Triggered from
+              <input id="log-from" name="triggeredFrom" type="datetime-local" />
+            </label>
+            <label>
+              Triggered to
+              <input id="log-to" name="triggeredTo" type="datetime-local" />
+            </label>
+            <div class="filter-actions">
+              <button class="primary-button" type="submit">Apply</button>
+              <button class="secondary-button" id="reset-log-filters" type="button">Reset</button>
+            </div>
+          </form>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="log-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Audit Trail</p>
+              <h2 id="log-title">Filtered Alert Logs</h2>
+            </div>
+            <div class="log-actions">
+              <span class="alert-summary" id="log-count">0 logs</span>
+              <button class="secondary-button compact-button" id="export-logs" type="button">Export</button>
+            </div>
+          </div>
+
+          <div class="log-table" id="log-table" aria-live="polite"></div>
+
+          <section class="info-panel chain-panel" aria-labelledby="chain-title">
+            <div class="section-header compact">
+              <h3 id="chain-title">Handling Chain</h3>
+              <span id="chain-summary" class="hint">Select a log</span>
+            </div>
+            <div class="chain-grid" id="chain-grid"></div>
+          </section>
+
+          <section class="info-panel export-panel" id="export-panel" aria-labelledby="export-title" hidden>
+            <div class="section-header compact">
+              <h3 id="export-title">Export Preview</h3>
+              <span id="export-meta" class="hint">JSON</span>
+            </div>
+            <pre id="export-preview"></pre>
           </section>
         </section>
       </section>
