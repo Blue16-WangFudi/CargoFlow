@@ -37,6 +37,7 @@ from cargoflow_api.dispatch_distribution import (
     DispatchDistributionError,
     DispatchDistributionStore,
 )
+from cargoflow_api.domain import StatusReportState, TransportTaskStatus
 from cargoflow_api.driver_workflow import DriverWorkflowError, DriverWorkflowStore
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
@@ -155,6 +156,10 @@ def eta_shipment_id(path: str) -> str | None:
 
 def trajectory_shipment_id(path: str) -> str | None:
     return shipment_action_id(path, "trajectory")
+
+
+def sign_shipment_id(path: str) -> str | None:
+    return shipment_action_id(path, "sign")
 
 
 def vehicle_id_from_path(path: str) -> str | None:
@@ -308,6 +313,10 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/qa/ask":
             self.ask_qa()
+            return
+        shipment_id = sign_shipment_id(path)
+        if shipment_id is not None:
+            self.sign_shipment(shipment_id)
             return
         qa_record_id = qa_record_action_from_path(path, "feedback")
         if qa_record_id is not None:
@@ -529,6 +538,17 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                     warehouse_ids=scope.warehouse_ids,
                 ),
             )
+            DRIVER_WORKFLOW.register_task(
+                result.task,
+                shipment_id=result.shipment_id,
+                tenant_id=scope.tenant_id,
+                cargo_number=result.cargo.cargo_number,
+                cargo_name=result.cargo.name,
+                vehicle_number=result.vehicle["vehicleNumber"],
+                plate_number=result.vehicle["plateNumber"],
+                origin=result.task.origin,
+                destination=result.task.destination,
+            )
         except AccessControlError as exc:
             self.send_access_error(exc)
             return
@@ -734,6 +754,15 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             principal = parse_principal(self.headers)
             payload = self.read_json_body()
             created = DRIVER_WORKFLOW.create_status_report(task_id, payload, principal)
+            status_report = created["statusReport"]
+            SHIPMENT_TRACKING.add_status_report(
+                task_id,
+                server_report_status(status_report["reportStatus"]),
+                status_report["reporterUserId"],
+                datetime.fromisoformat(status_report["reportedAt"]),
+                report_id=status_report["reportId"],
+                note=status_report.get("note"),
+            )
         except AccessControlError as exc:
             self.send_access_error(exc)
             return
@@ -744,6 +773,41 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             self.send_driver_workflow_error(exc)
             return
         self.send_json(HTTPStatus.CREATED, created)
+
+    def sign_shipment(self, shipment_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = SHIPMENT_TRACKING.sign_for_delivery(shipment_id, principal)
+            shipment = payload["shipment"]
+            DRIVER_WORKFLOW.update_task_status(
+                shipment["taskId"],
+                server_transport_status(shipment["transportStatus"]),
+                now=datetime.fromisoformat(shipment["signedAt"]),
+            )
+        except AccessControlError as exc:
+            status = HTTPStatus(exc.status_code)
+            self.send_json(
+                status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+                authenticate=status is HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        except DriverWorkflowError as exc:
+            self.send_driver_workflow_error(exc)
+            return
+        except ShipmentTrackingError as exc:
+            self.send_json(
+                exc.status,
+                {
+                    "error": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+            return
+        self.send_json(HTTPStatus.OK, payload)
 
     def send_latest_shipment_location(self, shipment_id: str) -> None:
         try:
@@ -991,6 +1055,20 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
 
 def create_server(host: str, port: int) -> ThreadingHTTPServer:
     return ThreadingHTTPServer((host, port), CargoFlowHandler)
+
+
+def server_report_status(value: str) -> StatusReportState:
+    try:
+        return StatusReportState(value)
+    except ValueError as exc:
+        raise DeviceEventError(f"Unsupported reportStatus returned by driver workflow: {value}") from exc
+
+
+def server_transport_status(value: str) -> TransportTaskStatus:
+    try:
+        return TransportTaskStatus(value)
+    except ValueError as exc:
+        raise DeviceEventError(f"Unsupported transportStatus returned by tracking: {value}") from exc
 
 
 def build_demo_business_context_filter() -> BusinessContextFilter:
