@@ -120,12 +120,14 @@ startup and check commands.
   create or merge route-deviation, abnormal-stop, or box-open alerts.
 - `GET /api/alerts`, `GET /api/alerts/{alertId}`,
   `POST /api/alerts/{alertId}/process`,
+  `POST /api/alerts/{alertId}/dispatch-commands`,
   `POST /api/alerts/{alertId}/close`, and
   `POST /api/alerts/{alertId}/false-positive` provide the current development
-  alert handling contract. Scoped dispatchers and system admins can move open
-  alerts into processing, close them with a required reason, or mark them as
-  false positives; handler, close actor, timestamps, and reason are returned for
-  audit.
+  alert handling contract. Scoped dispatchers and system admins can inspect alert
+  detail with notification and command chains, move open alerts into processing,
+  create dispatch commands, close them with a required reason, or mark them as
+  false positives; handler, close actor, timestamps, command status, and reason
+  are returned for audit.
 - `GET /api/alert-logs` and `GET /api/alert-logs/export` provide the current
   system-admin alert log contract. The endpoints support `type`, `severity`,
   `status`, `vehicleId`, `cargoId`, `triggeredFrom`, and `triggeredTo` filters

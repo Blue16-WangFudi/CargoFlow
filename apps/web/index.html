@@ -3,56 +3,131 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CargoFlow Console</title>
+    <title>CargoFlow Dispatch Console</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="shell">
-      <section class="panel status-panel" aria-labelledby="status-title">
+      <section class="topbar" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">CargoFlow</p>
-          <h1 id="status-title">Operations Console</h1>
+          <p class="eyebrow">CargoFlow Dispatch</p>
+          <h1 id="page-title">Alert Command Desk</h1>
         </div>
-        <div class="service-status" id="service-status">
+        <div class="service-status" id="service-status" data-state="loading">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="status-label">Checking API</span>
         </div>
       </section>
 
-      <section class="grid" aria-label="Demo shipment overview">
-        <article class="panel metric">
-          <span class="metric-label">Shipment</span>
-          <strong id="shipment-id">-</strong>
-          <span id="shipment-status">Waiting for API</span>
-        </article>
-        <article class="panel metric">
-          <span class="metric-label">Vehicle</span>
-          <strong id="vehicle">-</strong>
-          <span id="driver">-</span>
-        </article>
-        <article class="panel metric">
-          <span class="metric-label">ETA</span>
-          <strong id="eta">-</strong>
-          <span id="distance">-</span>
-        </article>
-      </section>
+      <section class="workspace" aria-label="Dispatch alert workspace">
+        <aside class="queue-panel" aria-labelledby="queue-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Queue</p>
+              <h2 id="queue-title">Open Alerts</h2>
+            </div>
+            <button class="icon-button" id="refresh-alerts" type="button" title="Refresh alerts" aria-label="Refresh alerts">
+              &#8635;
+            </button>
+          </div>
+          <div class="filter-row" role="group" aria-label="Alert status filter">
+            <button class="filter-button is-active" type="button" data-status="">All</button>
+            <button class="filter-button" type="button" data-status="pending">Pending</button>
+            <button class="filter-button" type="button" data-status="processing">Processing</button>
+          </div>
+          <div class="alert-list" id="alert-list" aria-live="polite"></div>
+        </aside>
 
-      <section class="panel details" aria-labelledby="location-title">
-        <h2 id="location-title">Latest Location</h2>
-        <dl>
-          <div>
-            <dt>Longitude</dt>
-            <dd id="longitude">-</dd>
+        <section class="detail-panel" aria-labelledby="detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Selected Alert</p>
+              <h2 id="detail-title">Alert Details</h2>
+            </div>
+            <div class="alert-summary" id="alert-summary">No alert selected</div>
           </div>
-          <div>
-            <dt>Latitude</dt>
-            <dd id="latitude">-</dd>
+
+          <div class="detail-grid">
+            <article class="info-panel">
+              <div class="section-header compact">
+                <h3>Incident</h3>
+                <span class="badge" id="alert-status">-</span>
+              </div>
+              <dl class="info-list">
+                <div>
+                  <dt>Alert</dt>
+                  <dd id="alert-number">-</dd>
+                </div>
+                <div>
+                  <dt>Severity</dt>
+                  <dd id="alert-severity">-</dd>
+                </div>
+                <div>
+                  <dt>Type</dt>
+                  <dd id="alert-type">-</dd>
+                </div>
+                <div>
+                  <dt>Vehicle</dt>
+                  <dd id="alert-vehicle">-</dd>
+                </div>
+                <div>
+                  <dt>Cargo</dt>
+                  <dd id="alert-cargo">-</dd>
+                </div>
+                <div>
+                  <dt>Triggered</dt>
+                  <dd id="alert-triggered">-</dd>
+                </div>
+              </dl>
+            </article>
+
+            <article class="info-panel">
+              <div class="section-header compact">
+                <h3>Evidence</h3>
+              </div>
+              <div class="evidence-list" id="evidence-list"></div>
+            </article>
           </div>
-          <div>
-            <dt>Recorded At</dt>
-            <dd id="recorded-at">-</dd>
-          </div>
-        </dl>
+
+          <section class="workflow-grid" aria-label="Command and closure workflow">
+            <form class="info-panel form-panel" id="command-form">
+              <div class="section-header compact">
+                <h3>Create Command</h3>
+                <span class="hint">Driver target</span>
+              </div>
+              <label>
+                Target ID
+                <input id="command-target" name="targetId" type="text" value="driver-demo" autocomplete="off" />
+              </label>
+              <label>
+                Command
+                <textarea id="command-content" name="content" rows="4">Inspect cargo seal and confirm box status.</textarea>
+              </label>
+              <button class="primary-button" id="send-command" type="submit">Send Command</button>
+            </form>
+
+            <form class="info-panel form-panel" id="close-form">
+              <div class="section-header compact">
+                <h3>Close Alert</h3>
+                <span class="hint">Audit required</span>
+              </div>
+              <label>
+                Close reason
+                <textarea id="close-reason" name="closeReason" rows="4">Driver confirmed cargo is secured and the seal is intact.</textarea>
+              </label>
+              <button class="secondary-button" id="close-alert" type="submit">Close Alert</button>
+            </form>
+          </section>
+
+          <section class="info-panel command-panel" aria-labelledby="command-title">
+            <div class="section-header compact">
+              <h3 id="command-title">Command Status</h3>
+              <span id="command-count" class="hint">0 commands</span>
+            </div>
+            <div class="command-list" id="command-list"></div>
+          </section>
+        </section>
       </section>
     </main>
     <script src="./app.js" defer></script>

@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Any, Mapping
+from uuid import uuid4
 
 from cargoflow_api.access_control import Principal, Role
 from cargoflow_api.alert_rules import AlertRuleStore, alert_to_wire
@@ -201,6 +202,10 @@ class AlertHandlingStore:
         self._require_alert_access(principal, alert)
         return alert
 
+    def alert_detail_payload(self, alert_id: str, principal: Principal) -> dict[str, Any]:
+        alert = self.get_alert(alert_id, principal)
+        return _alert_detail_to_wire(alert, self)
+
     def query_alert_logs(
         self,
         principal: Principal,
@@ -285,6 +290,48 @@ class AlertHandlingStore:
             terminal_status=AlertStatus.FALSE_POSITIVE,
             now=now,
         )
+
+    def create_dispatch_command(
+        self,
+        alert_id: str,
+        payload: Mapping[str, Any],
+        principal: Principal,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[Alert, DispatchCommand]:
+        alert = self._alert_for(alert_id)
+        self._require_alert_access(principal, alert)
+        if not alert.is_open:
+            raise AlertConflictError("Terminal alerts cannot receive dispatch commands.")
+
+        issued_at = _utc_now(now)
+        command = DispatchCommand(
+            id=f"cmd-{uuid4().hex}",
+            command_number=_next_command_number(alert.id, self, issued_at),
+            task_id=alert.task_id,
+            alert_id=alert.id,
+            content=_required_text(payload, "content"),
+            created_by_user_id=principal.user_id,
+            target_type=_target_type_from_wire(
+                _value(payload, "targetType", default=DispatchTargetType.DRIVER.value)
+            ),
+            target_id=_required_text(payload, "targetId"),
+            status=DispatchCommandStatus.SENT,
+            issued_at=issued_at,
+        )
+        self.add_dispatch_command(command)
+
+        if alert.status is AlertStatus.PENDING:
+            alert = self.alert_store.save_alert(
+                replace(
+                    alert,
+                    status=AlertStatus.PROCESSING,
+                    handled_by_user_id=principal.user_id,
+                    handled_at=issued_at,
+                    updated_at=issued_at,
+                )
+            )
+        return alert, command
 
     def _finish_alert(
         self,
@@ -399,6 +446,14 @@ def alert_log_filters_from_query(params: Mapping[str, str]) -> AlertLogFilters:
 
 
 def _alert_log_to_wire(alert: Alert, store: AlertHandlingStore) -> dict[str, Any]:
+    payload = _alert_detail_to_wire(alert, store)
+    payload["chain"]["hasClosedAudit"] = (
+        alert.closed_at is not None and alert.close_reason is not None
+    )
+    return payload
+
+
+def _alert_detail_to_wire(alert: Alert, store: AlertHandlingStore) -> dict[str, Any]:
     payload = alert_to_wire(alert)
     payload["notifications"] = [
         _notification_to_wire(notification)
@@ -410,7 +465,6 @@ def _alert_log_to_wire(alert: Alert, store: AlertHandlingStore) -> dict[str, Any
     payload["chain"] = {
         "notificationCount": len(payload["notifications"]),
         "dispatchCommandCount": len(payload["dispatchCommands"]),
-        "hasClosedAudit": alert.closed_at is not None and alert.close_reason is not None,
     }
     return payload
 
@@ -451,6 +505,10 @@ def _dispatch_command_to_wire(command: DispatchCommand) -> dict[str, Any]:
     if command.failure_reason is not None:
         payload["failureReason"] = command.failure_reason
     return payload
+
+
+def dispatch_command_to_wire(command: DispatchCommand) -> dict[str, Any]:
+    return _dispatch_command_to_wire(command)
 
 
 def _alert_log_filters_to_wire(filters: AlertLogFilters) -> dict[str, Any]:
@@ -508,8 +566,13 @@ def _required_reason(payload: Mapping[str, Any]) -> str:
     value = _value(payload, "closeReason", default=None)
     if value is None:
         value = _value(payload, "reason", default=None)
+    return _required_text({"closeReason": value}, "closeReason")
+
+
+def _required_text(payload: Mapping[str, Any], name: str) -> str:
+    value = _value(payload, name, default=None)
     if not isinstance(value, str) or not value.strip():
-        raise AlertValidationError("closeReason must be a non-empty string.")
+        raise AlertValidationError(f"{name} must be a non-empty string.")
     return value.strip()
 
 
@@ -538,6 +601,24 @@ def _severity_from_wire(value: str) -> AlertSeverity:
     except ValueError as exc:
         allowed = ", ".join(severity.value for severity in AlertSeverity)
         raise AlertValidationError(f"severity must be one of: {allowed}.") from exc
+
+
+def _target_type_from_wire(value: str) -> DispatchTargetType:
+    normalized = value.strip().lower().replace("-", "_")
+    try:
+        return DispatchTargetType(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(target_type.value for target_type in DispatchTargetType)
+        raise AlertValidationError(f"targetType must be one of: {allowed}.") from exc
+
+
+def _next_command_number(
+    alert_id: str,
+    store: AlertHandlingStore,
+    issued_at: datetime,
+) -> str:
+    sequence = len(store._dispatch_commands(alert_id)) + 1
+    return f"CMD-{issued_at:%Y%m%d}-{sequence:03d}"
 
 
 def _datetime_from_query(value: str) -> datetime:
