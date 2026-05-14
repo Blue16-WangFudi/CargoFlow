@@ -40,6 +40,15 @@ from cargoflow_api.dispatch_distribution import (
 from cargoflow_api.driver_workflow import DriverWorkflowError, DriverWorkflowStore
 from cargoflow_api.eta import EtaService
 from cargoflow_api.location_ingest import DeviceEventError, DeviceEventStore
+from cargoflow_api.qa_context import (
+    AlertContextRecord,
+    BusinessContextFilter,
+    BusinessContextScope,
+    CargoContextRecord,
+    TaskContextRecord,
+    VehicleContextRecord,
+)
+from cargoflow_api.qa_service import QaService, QaServiceError
 from cargoflow_api.shipment_tracking import ShipmentTrackingError, ShipmentTrackingStore
 from cargoflow_api.vehicle_management import (
     VehicleManagementError,
@@ -176,9 +185,23 @@ def alert_action_from_path(path: str, action: str) -> str | None:
     return None
 
 
+def qa_record_id_from_path(path: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 4 and parts[:3] == ["api", "qa", "records"]:
+        return parts[3]
+    return None
+
+
 def driver_task_action_from_path(path: str, action: str) -> str | None:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if len(parts) == 5 and parts[:3] == ["api", "driver", "tasks"] and parts[4] == action:
+        return parts[3]
+    return None
+
+
+def qa_record_action_from_path(path: str, action: str) -> str | None:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    if len(parts) == 5 and parts[:3] == ["api", "qa", "records"] and parts[4] == action:
         return parts[3]
     return None
 
@@ -234,6 +257,13 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
         if path == "/api/alert-logs/export":
             self.send_alert_logs(export=True)
             return
+        if path == "/api/qa/records":
+            self.send_qa_records()
+            return
+        qa_record_id = qa_record_id_from_path(path)
+        if qa_record_id is not None:
+            self.send_qa_record(qa_record_id)
+            return
         if path == "/api/driver/tasks":
             self.send_driver_tasks()
             return
@@ -275,6 +305,13 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/cargo-bindings":
             self.bind_cargo_vehicle()
+            return
+        if path == "/api/qa/ask":
+            self.ask_qa()
+            return
+        qa_record_id = qa_record_action_from_path(path, "feedback")
+        if qa_record_id is not None:
+            self.apply_qa_feedback(qa_record_id)
             return
         task_id = driver_task_action_from_path(path, "status-reports")
         if task_id is not None:
@@ -541,6 +578,62 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.OK, payload)
 
+    def ask_qa(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            response = QA_SERVICE.ask(payload, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DeviceEventError as exc:
+            self.send_device_event_error(exc)
+            return
+        except QaServiceError as exc:
+            self.send_qa_error(exc)
+            return
+        self.send_json(HTTPStatus.CREATED, response)
+
+    def send_qa_records(self) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = QA_SERVICE.list_records(principal, self.query_params())
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except QaServiceError as exc:
+            self.send_qa_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
+    def send_qa_record(self, record_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = QA_SERVICE.get_record(record_id, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except QaServiceError as exc:
+            self.send_qa_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, payload)
+
+    def apply_qa_feedback(self, record_id: str) -> None:
+        try:
+            principal = parse_principal(self.headers)
+            payload = self.read_json_body()
+            response = QA_SERVICE.apply_feedback(record_id, payload, principal)
+        except AccessControlError as exc:
+            self.send_access_error(exc)
+            return
+        except DeviceEventError as exc:
+            self.send_device_event_error(exc)
+            return
+        except QaServiceError as exc:
+            self.send_qa_error(exc)
+            return
+        self.send_json(HTTPStatus.OK, response)
+
     def send_alert(self, alert_id: str) -> None:
         try:
             principal = parse_principal(self.headers)
@@ -796,6 +889,15 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def send_qa_error(self, exc: QaServiceError) -> None:
+        self.send_json(
+            exc.status,
+            {
+                "error": exc.error_code,
+                "message": exc.message,
+            },
+        )
+
     def send_driver_workflow_error(self, exc: DriverWorkflowError) -> None:
         self.send_json(
             exc.status,
@@ -889,6 +991,81 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
 
 def create_server(host: str, port: int) -> ThreadingHTTPServer:
     return ThreadingHTTPServer((host, port), CargoFlowHandler)
+
+
+def build_demo_business_context_filter() -> BusinessContextFilter:
+    scope = BusinessContextScope(
+        tenant_id="cgf-demo",
+        owner_user_id="owner-acme",
+        driver_user_id="driver-demo",
+        warehouse_ids=("warehouse-shanghai",),
+        dispatch_region_ids=("east-china",),
+    )
+    cargo = CARGO_BINDINGS.cargo_for("cargo-demo-001")
+    task = CARGO_BINDINGS.task_for("task-demo-001")
+    vehicle = VEHICLES.get_vehicle(
+        "vehicle-demo-001",
+        Principal(
+            "admin-demo",
+            Role.SYSTEM_ADMIN,
+            "cgf-demo",
+        ),
+    )
+    alert = ALERT_RULES.get_alert("alert-demo-box-001")
+    cargos = ()
+    tasks = ()
+    vehicles = ()
+    alerts = ()
+    if cargo is not None:
+        cargos = (
+            CargoContextRecord(
+                cargo=cargo,
+                scope=scope,
+                shipment_id="CGF-DEMO-001",
+                task_id="task-demo-001",
+                vehicle_id="vehicle-demo-001",
+            ),
+        )
+    if task is not None:
+        tasks = (
+            TaskContextRecord(
+                task=task,
+                scope=scope,
+                shipment_id="CGF-DEMO-001",
+                cargo_number=cargo.cargo_number if cargo is not None else None,
+            ),
+        )
+    vehicles = (
+        VehicleContextRecord(
+            vehicle=vehicle,
+            tenant_id="cgf-demo",
+            business_scope=scope,
+            shipment_id="CGF-DEMO-001",
+            task_id="task-demo-001",
+            cargo_id="cargo-demo-001",
+            cargo_number=cargo.cargo_number if cargo is not None else None,
+            dispatch_region_ids=("east-china",),
+        ),
+    )
+    if alert is not None:
+        alerts = (
+            AlertContextRecord(
+                alert=alert,
+                scope=scope,
+                shipment_id="CGF-DEMO-001",
+                cargo_number=cargo.cargo_number if cargo is not None else None,
+                task_number=task.task_number if task is not None else None,
+            ),
+        )
+    return BusinessContextFilter(
+        cargos=cargos,
+        tasks=tasks,
+        vehicles=vehicles,
+        alerts=alerts,
+    )
+
+
+QA_SERVICE = QaService(context_filter=build_demo_business_context_filter())
 
 
 def run(host: str, port: int) -> None:
