@@ -163,12 +163,21 @@ h3 {
   align-items: start;
 }
 
+.shipper-workspace {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+
 .view-panel {
   display: none;
 }
 
 .view-panel.is-active.workspace,
-.view-panel.is-active.admin-workspace {
+.view-panel.is-active.admin-workspace,
+.view-panel.is-active.shipper-workspace {
   display: grid;
 }
 
@@ -251,7 +260,8 @@ h3 {
 
 .filter-button,
 .primary-button,
-.secondary-button {
+.secondary-button,
+.neutral-button {
   min-height: 38px;
   border-radius: 6px;
   font-weight: 700;
@@ -468,9 +478,242 @@ button:focus-visible {
   border-color: #ffa198;
 }
 
+.neutral-button {
+  border: 1px solid rgb(88 166 255 / 44%);
+  background: rgb(88 166 255 / 14%);
+  color: #a5d6ff;
+}
+
+.neutral-button:hover {
+  border-color: #a5d6ff;
+}
+
 .compact-button {
   min-height: 34px;
   padding: 0 14px;
+}
+
+.shipment-card {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  border: 1px solid rgb(209 217 224 / 14%);
+  border-radius: 8px;
+  background: #0d1117;
+  padding: 14px;
+}
+
+.shipment-card strong {
+  color: #f0f6fc;
+  font-size: 18px;
+  line-height: 26px;
+}
+
+.shipment-card span {
+  color: #8b949e;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.shipment-number {
+  color: #7ee787;
+}
+
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.compact-list {
+  grid-template-columns: 1fr;
+  margin-top: 16px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.metric-card {
+  display: grid;
+  min-height: 118px;
+  gap: 9px;
+  align-content: center;
+  border: 1px solid rgb(209 217 224 / 12%);
+  border-radius: 8px;
+  background: #0d1117;
+  padding: 16px;
+}
+
+.metric-card span,
+.metric-card small {
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.metric-card strong {
+  color: #f0f6fc;
+  font-size: 22px;
+  line-height: 30px;
+  overflow-wrap: anywhere;
+}
+
+.shipper-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.route-panel {
+  min-height: 320px;
+}
+
+.route-canvas {
+  min-height: 246px;
+  border: 1px solid rgb(209 217 224 / 10%);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgb(88 166 255 / 8%) 1px, transparent 1px),
+    linear-gradient(180deg, rgb(88 166 255 / 8%) 1px, transparent 1px),
+    #0d1117;
+  background-size: 40px 40px;
+  overflow: hidden;
+  padding: 22px;
+}
+
+.route-track {
+  position: relative;
+  min-height: 200px;
+}
+
+.route-track::before {
+  position: absolute;
+  top: 50%;
+  right: 8%;
+  left: 8%;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3fb950, #58a6ff, #f85149);
+  content: "";
+}
+
+.route-node {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  width: 128px;
+  gap: 5px;
+  justify-items: center;
+  color: #f0f6fc;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.route-node strong {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.route-node small {
+  color: #8b949e;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.route-node.alert {
+  top: 30%;
+}
+
+.route-pin {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #0d1117;
+  border-radius: 999px;
+  background: #58a6ff;
+  box-shadow: 0 0 0 3px rgb(88 166 255 / 26%);
+}
+
+.route-node.start .route-pin {
+  background: #3fb950;
+  box-shadow: 0 0 0 3px rgb(63 185 80 / 24%);
+}
+
+.route-node.end .route-pin,
+.route-node.alert .route-pin {
+  background: #f85149;
+  box-shadow: 0 0 0 3px rgb(248 81 73 / 24%);
+}
+
+.badge.current,
+.badge.tracked,
+.badge.gps,
+.badge.start,
+.badge.end {
+  border-color: rgb(63 185 80 / 36%);
+  background: rgb(63 185 80 / 14%);
+  color: #7ee787;
+}
+
+.badge.delayed,
+.badge.missing {
+  border-color: rgb(248 81 73 / 36%);
+  background: rgb(248 81 73 / 15%);
+  color: #ffa198;
+}
+
+.trajectory-panel,
+.shipper-alert-panel {
+  margin-top: 16px;
+}
+
+.trajectory-list,
+.shipper-alert-list {
+  display: grid;
+  gap: 10px;
+}
+
+.trajectory-item,
+.shipper-alert-item {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgb(209 217 224 / 12%);
+  border-radius: 8px;
+  background: #0d1117;
+  padding: 12px;
+}
+
+.trajectory-item {
+  grid-template-columns: 120px minmax(0, 1fr) minmax(150px, 0.35fr);
+}
+
+.shipper-alert-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.trajectory-content,
+.shipper-alert-main {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.trajectory-content span,
+.shipper-alert-main small,
+.trajectory-item time {
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  overflow-wrap: anywhere;
 }
 
 .log-table {
@@ -625,10 +868,13 @@ button:focus-visible {
   .topbar,
   .workspace,
   .admin-workspace,
+  .shipper-workspace,
   .detail-grid,
   .workflow-grid,
   .command-item,
-  .chain-grid {
+  .chain-grid,
+  .metric-grid,
+  .shipper-detail-grid {
     grid-template-columns: 1fr;
   }
 
@@ -672,7 +918,10 @@ button:focus-visible {
   .filter-row,
   .filter-actions,
   .info-list,
-  .timeline {
+  .timeline,
+  .quick-actions,
+  .trajectory-item,
+  .shipper-alert-item {
     grid-template-columns: 1fr;
   }
 
@@ -681,5 +930,52 @@ button:focus-visible {
   .alert-card-foot {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .route-canvas {
+    min-height: 320px;
+  }
+
+  .route-track {
+    min-height: 274px;
+  }
+
+  .route-track::before {
+    top: 20px;
+    bottom: 20px;
+    left: 22px;
+    width: 3px;
+    height: auto;
+    background: linear-gradient(180deg, #3fb950, #58a6ff, #f85149);
+  }
+
+  .route-node {
+    left: 22px !important;
+    width: min(260px, calc(100vw - 98px));
+    justify-items: start;
+    padding-left: 30px;
+    text-align: left;
+    transform: translate(0, -50%);
+  }
+
+  .route-node.start {
+    top: 20px;
+  }
+
+  .route-node.current {
+    top: 50%;
+  }
+
+  .route-node.end {
+    top: calc(100% - 20px);
+  }
+
+  .route-node.alert {
+    top: 34%;
+  }
+
+  .route-pin {
+    position: absolute;
+    left: -7px;
   }
 }
