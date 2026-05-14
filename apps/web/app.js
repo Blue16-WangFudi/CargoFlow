@@ -27,6 +27,17 @@ const systemAdminAuthHeaders = {
 const state = {
   alerts: [],
   logs: [],
+  distribution: {
+    vehicles: [],
+    selectedVehicleId: null,
+    statusFilter: "",
+    summary: {
+      total: 0,
+      online: 0,
+      inTransit: 0,
+      alerting: 0,
+    },
+  },
   selectedLogId: null,
   selectedAlertId: null,
   statusFilter: "",
@@ -94,6 +105,19 @@ const formatDistance = (value) => {
     return "-";
   }
   return `${value} km remaining`;
+};
+
+const statusLabel = (vehicle) => {
+  if (!vehicle) {
+    return "-";
+  }
+  if (vehicle.alertSummary?.hasActiveAlert) {
+    return "Active Alert";
+  }
+  if (vehicle.transportStatus === "in_transit") {
+    return "In Transit";
+  }
+  return titleCase(vehicle.onlineStatus || vehicle.bindingStatus);
 };
 
 const requestJson = async (path, options = {}) => {
@@ -175,6 +199,34 @@ const loadLogs = async () => {
   setStatus(`${payload.count} alert log${payload.count === 1 ? "" : "s"}`, "ok");
 };
 
+const loadDistribution = async () => {
+  setStatus("Loading vehicle distribution", "loading");
+  const query = state.distribution.statusFilter
+    ? `?status=${encodeURIComponent(state.distribution.statusFilter)}`
+    : "";
+  const payload = await requestJson(`/api/dispatch/vehicle-distribution${query}`);
+  state.distribution.vehicles = payload.vehicles || [];
+  state.distribution.summary = payload.summary || {
+    total: 0,
+    online: 0,
+    inTransit: 0,
+    alerting: 0,
+  };
+  if (
+    !state.distribution.vehicles.some(
+      (vehicle) => vehicle.vehicleId === state.distribution.selectedVehicleId,
+    )
+  ) {
+    state.distribution.selectedVehicleId =
+      state.distribution.vehicles.find((vehicle) => vehicle.alertSummary?.hasActiveAlert)
+        ?.vehicleId ||
+      state.distribution.vehicles[0]?.vehicleId ||
+      null;
+  }
+  renderDistribution();
+  setStatus(`${payload.count} mapped vehicle${payload.count === 1 ? "" : "s"}`, "ok");
+};
+
 const loadShipperDetail = async () => {
   setStatus("Loading cargo detail", "loading");
   const snapshot = await requestJson("/api/shipments/demo", {
@@ -201,6 +253,166 @@ const loadShipperDetail = async () => {
   };
   renderShipperDetail();
   setStatus(`${shipmentId} cargo detail ready`, "ok");
+};
+
+const renderDistribution = () => {
+  const summary = state.distribution.summary;
+  setText("distribution-total", summary.total ?? 0);
+  setText("distribution-online", summary.online ?? 0);
+  setText("distribution-in-transit", summary.inTransit ?? 0);
+  setText("distribution-alerting", summary.alerting ?? 0);
+  setText(
+    "distribution-summary-label",
+    `${state.distribution.vehicles.length} visible · ${summary.alerting ?? 0} alerting`,
+  );
+  setText(
+    "map-count",
+    `${state.distribution.vehicles.length} vehicle${state.distribution.vehicles.length === 1 ? "" : "s"}`,
+  );
+  renderVehicleList();
+  renderVehicleMap();
+  renderSelectedVehicle();
+};
+
+const renderVehicleList = () => {
+  const list = $("vehicle-list");
+  list.replaceChildren();
+  if (state.distribution.vehicles.length === 0) {
+    list.append(emptyMessage("No vehicles match this distribution filter."));
+    return;
+  }
+  state.distribution.vehicles.forEach((vehicle) => {
+    const button = document.createElement("button");
+    button.className = "vehicle-card";
+    button.type = "button";
+    button.dataset.vehicleId = vehicle.vehicleId;
+    button.setAttribute(
+      "aria-pressed",
+      String(vehicle.vehicleId === state.distribution.selectedVehicleId),
+    );
+
+    const top = createElement("span", "vehicle-card-top");
+    top.append(
+      createElement("strong", "", vehicle.vehicleNumber),
+      createElement("span", `badge ${vehicleBadgeClass(vehicle)}`, statusLabel(vehicle)),
+    );
+    const meta = createElement(
+      "span",
+      "vehicle-card-meta",
+      `${vehicle.plateNumber} · ${vehicle.cargoId || "No cargo"}`,
+    );
+    const foot = createElement(
+      "span",
+      "vehicle-card-foot",
+      `${formatCoordinate(vehicle.latestLocation)} · ${formatDate(vehicle.latestLocation?.updatedAt)}`,
+    );
+    button.append(top, meta, foot);
+    button.addEventListener("click", () => {
+      state.distribution.selectedVehicleId = vehicle.vehicleId;
+      renderDistribution();
+    });
+    list.append(button);
+  });
+};
+
+const renderVehicleMap = () => {
+  const map = $("vehicle-map");
+  map.replaceChildren();
+  if (state.distribution.vehicles.length === 0) {
+    map.append(emptyMessage("No vehicle coordinates are available for this filter."));
+    return;
+  }
+
+  const bounds = coordinateBounds(state.distribution.vehicles);
+  state.distribution.vehicles.forEach((vehicle) => {
+    const marker = document.createElement("button");
+    marker.className = `vehicle-marker ${vehicleBadgeClass(vehicle)}`;
+    marker.type = "button";
+    marker.dataset.vehicleId = vehicle.vehicleId;
+    marker.setAttribute(
+      "aria-label",
+      `${vehicle.vehicleNumber} ${statusLabel(vehicle)} at ${formatCoordinate(vehicle.latestLocation)}`,
+    );
+    marker.setAttribute(
+      "aria-pressed",
+      String(vehicle.vehicleId === state.distribution.selectedVehicleId),
+    );
+    const position = mapPosition(vehicle.latestLocation, bounds);
+    marker.style.left = `${position.x}%`;
+    marker.style.top = `${position.y}%`;
+    marker.append(
+      createElement("span", "marker-dot", ""),
+      createElement("strong", "", vehicle.vehicleNumber),
+    );
+    marker.addEventListener("click", () => {
+      state.distribution.selectedVehicleId = vehicle.vehicleId;
+      renderDistribution();
+    });
+    map.append(marker);
+  });
+};
+
+const renderSelectedVehicle = () => {
+  const vehicle = state.distribution.vehicles.find(
+    (item) => item.vehicleId === state.distribution.selectedVehicleId,
+  );
+  if (!vehicle) {
+    setText("selected-vehicle-number", "-");
+    setText("selected-vehicle-plate", "-");
+    setText("selected-vehicle-cargo", "-");
+    setText("selected-vehicle-driver", "-");
+    setText("selected-vehicle-location", "-");
+    setText("selected-vehicle-updated", "-");
+    setText("selected-vehicle-state", "-");
+    $("selected-vehicle-state").className = "badge";
+    $("open-vehicle-alert").disabled = true;
+    return;
+  }
+
+  setText("selected-vehicle-number", vehicle.vehicleNumber);
+  setText("selected-vehicle-plate", vehicle.plateNumber);
+  setText("selected-vehicle-cargo", vehicle.cargoId || "-");
+  setText("selected-vehicle-driver", vehicle.driverUserId || "-");
+  setText("selected-vehicle-location", formatCoordinate(vehicle.latestLocation));
+  setText("selected-vehicle-updated", formatDate(vehicle.latestLocation?.updatedAt));
+  setText("selected-vehicle-state", statusLabel(vehicle));
+  $("selected-vehicle-state").className = `badge ${vehicleBadgeClass(vehicle)}`;
+  $("open-vehicle-alert").disabled = !vehicle.alertSummary?.hasActiveAlert;
+};
+
+const coordinateBounds = (vehicles) => {
+  const longitudes = vehicles.map((vehicle) => Number(vehicle.latestLocation?.longitude));
+  const latitudes = vehicles.map((vehicle) => Number(vehicle.latestLocation?.latitude));
+  return {
+    minLng: Math.min(...longitudes),
+    maxLng: Math.max(...longitudes),
+    minLat: Math.min(...latitudes),
+    maxLat: Math.max(...latitudes),
+  };
+};
+
+const mapPosition = (location, bounds) => {
+  const longitudeRange = bounds.maxLng - bounds.minLng || 1;
+  const latitudeRange = bounds.maxLat - bounds.minLat || 1;
+  const x = 10 + ((Number(location.longitude) - bounds.minLng) / longitudeRange) * 80;
+  const y = 90 - ((Number(location.latitude) - bounds.minLat) / latitudeRange) * 80;
+  return {
+    x: Math.max(7, Math.min(93, x)),
+    y: Math.max(8, Math.min(92, y)),
+  };
+};
+
+const vehicleBadgeClass = (vehicle) => {
+  if (vehicle.alertSummary?.hasActiveAlert) {
+    return vehicle.alertSummary.highestSeverity || "high";
+  }
+  if (vehicle.onlineStatus === "delayed") {
+    return "delayed";
+  }
+  if (vehicle.onlineStatus === "online") {
+    return "online";
+  }
+  return vehicle.onlineStatus || vehicle.bindingStatus || "offline";
 };
 
 const renderAlertList = () => {
@@ -581,14 +793,25 @@ const openAlertEntry = async (alertId) => {
   if (!alertId) {
     return;
   }
-  switchView("dispatch");
   state.statusFilter = "";
-  document.querySelectorAll(".filter-button").forEach((button) => {
+  document.querySelectorAll(".alert-filter-button").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.status === "");
   });
   state.selectedAlertId = alertId;
+  switchView("alert-handling");
   await loadAlerts();
-  $("dispatch-view").scrollIntoView({ block: "start", behavior: "auto" });
+  $("alert-handling-view").scrollIntoView({ block: "start", behavior: "auto" });
+};
+
+const openSelectedVehicleAlert = async () => {
+  const vehicle = state.distribution.vehicles.find(
+    (item) => item.vehicleId === state.distribution.selectedVehicleId,
+  );
+  const alertId = vehicle?.alertSummary?.alertIds?.[0];
+  if (!alertId) {
+    return;
+  }
+  await openAlertEntry(alertId);
 };
 
 const renderSelectedLogChain = () => {
@@ -718,6 +941,7 @@ const wireEvents = () => {
   document.querySelectorAll(".mode-tab").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
   });
+  $("refresh-distribution").addEventListener("click", () => loadDistribution().catch(handleError));
   $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
   $("refresh-logs").addEventListener("click", () => loadLogs().catch(handleError));
   $("refresh-shipper").addEventListener("click", () => loadShipperDetail().catch(handleError));
@@ -740,21 +964,35 @@ const wireEvents = () => {
     loadLogs().catch(handleError);
   });
   $("export-logs").addEventListener("click", () => exportLogs().catch(handleError));
+  $("open-vehicle-alert").addEventListener("click", () =>
+    openSelectedVehicleAlert().catch(handleError),
+  );
   $("command-form").addEventListener("submit", (event) =>
     createCommand(event).catch(handleError),
   );
   $("close-form").addEventListener("submit", (event) =>
     closeAlert(event).catch(handleError),
   );
-  document.querySelectorAll(".filter-button").forEach((button) => {
+  document.querySelectorAll(".alert-filter-button").forEach((button) => {
     button.addEventListener("click", () => {
       document
-        .querySelectorAll(".filter-button")
+        .querySelectorAll(".alert-filter-button")
         .forEach((item) => item.classList.remove("is-active"));
       button.classList.add("is-active");
       state.statusFilter = button.dataset.status || "";
       state.selectedAlertId = null;
       loadAlerts().catch(handleError);
+    });
+  });
+  document.querySelectorAll(".distribution-filter-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      document
+        .querySelectorAll(".distribution-filter-button")
+        .forEach((item) => item.classList.remove("is-active"));
+      button.classList.add("is-active");
+      state.distribution.statusFilter = button.dataset.distributionStatus || "";
+      state.distribution.selectedVehicleId = null;
+      loadDistribution().catch(handleError);
     });
   });
 };
@@ -767,6 +1005,23 @@ const switchView = (view) => {
   document.querySelectorAll(".view-panel").forEach((panel) => {
     panel.classList.toggle("is-active", panel.id === `${state.activeView}-view`);
   });
+  if (state.activeView === "dispatch" && state.distribution.vehicles.length === 0) {
+    loadDistribution().catch(handleError);
+  } else if (state.activeView === "dispatch") {
+    setStatus(
+      `${state.distribution.vehicles.length} mapped vehicle${state.distribution.vehicles.length === 1 ? "" : "s"}`,
+      "ok",
+    );
+  }
+  if (
+    state.activeView === "alert-handling" &&
+    state.alerts.length === 0 &&
+    !state.selectedAlertId
+  ) {
+    loadAlerts().catch(handleError);
+  } else if (state.activeView === "alert-handling") {
+    setStatus(`${state.alerts.length} scoped alert${state.alerts.length === 1 ? "" : "s"}`, "ok");
+  }
   if (state.activeView === "admin-logs" && state.logs.length === 0) {
     loadLogs().catch(handleError);
   }
@@ -782,4 +1037,4 @@ const handleError = (error) => {
 };
 
 wireEvents();
-loadAlerts().catch(handleError);
+loadDistribution().catch(handleError);
