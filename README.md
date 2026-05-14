@@ -135,6 +135,9 @@ startup and check commands.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).
+  The current backend includes an authorization-scoped business context filter
+  for Q&A retrieval; cargo, vehicle, transport task, and alert candidates must
+  pass that filter before they are sent to any retrieval or generation layer.
 
 ## Core Domain Contracts
 
