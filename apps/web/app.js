@@ -28,10 +28,18 @@ const cargoOwnerAuthHeaders = getAuthHeaders("cargo_owner");
 const systemAdminAuthHeaders = getAuthHeaders("system_admin");
 const driverAuthHeaders = getAuthHeaders("driver");
 
+const warehouseAuthHeaders = getAuthHeaders("warehouse_admin");
+
 const state = {
   role: initialRole,
   alerts: [],
+  vehicles: [],
   logs: [],
+  selectedLogId: null,
+  selectedAlertId: null,
+  selectedVehicleId: null,
+  statusFilter: "",
+  vehicleFilter: "all",
   distribution: {
     vehicles: [],
     selectedVehicleId: null,
@@ -608,6 +616,19 @@ const driverCommandActionLabel = (command) => {
 const isTerminalDriverCommand = (command) =>
   ["acknowledged", "failed", "revoked"].includes(command.status);
 
+const loadWarehouse = async () => {
+  setStatus("Loading vehicles", "loading");
+  const payload = await requestJson("/api/vehicles", {
+    authHeaders: warehouseAuthHeaders,
+  });
+  state.vehicles = payload.vehicles || [];
+  if (!state.vehicles.some((vehicle) => vehicle.vehicleId === state.selectedVehicleId)) {
+    state.selectedVehicleId = state.vehicles[0]?.vehicleId || null;
+  }
+  renderWarehouse();
+  setStatus(`${payload.count} warehouse vehicle${payload.count === 1 ? "" : "s"}`, "ok");
+};
+
 const renderAlertList = () => {
   const list = $("alert-list");
   list.replaceChildren();
@@ -982,6 +1003,255 @@ const renderShipperAlerts = (alertPoints) => {
   });
 };
 
+const renderWarehouse = () => {
+  renderWarehouseSummary();
+  renderVehicleList();
+  renderVehicleDetail();
+  renderAvailableVehicleSelect();
+};
+
+const renderWarehouseSummary = () => {
+  const available = state.vehicles.filter((vehicle) => vehicle.bindingStatus === "available");
+  const bound = state.vehicles.filter((vehicle) => vehicle.bindingStatus === "bound");
+  const disabled = state.vehicles.filter((vehicle) => vehicle.bindingStatus === "disabled");
+  setText("warehouse-available-count", String(available.length));
+  setText("warehouse-bound-count", String(bound.length));
+  setText("warehouse-disabled-count", String(disabled.length));
+  setText(
+    "warehouse-summary",
+    `${available.length} available · ${bound.length} bound · ${disabled.length} disabled`,
+  );
+};
+
+const filteredVehicles = () => {
+  if (state.vehicleFilter === "all") {
+    return state.vehicles;
+  }
+  return state.vehicles.filter((vehicle) => vehicle.bindingStatus === state.vehicleFilter);
+};
+
+const selectedVehicle = () =>
+  state.vehicles.find((vehicle) => vehicle.vehicleId === state.selectedVehicleId) || null;
+
+const renderVehicleList = () => {
+  const list = $("warehouse-vehicle-list");
+  list.replaceChildren();
+  const vehicles = filteredVehicles();
+  if (vehicles.length === 0) {
+    list.append(emptyMessage("No vehicles match this filter."));
+    return;
+  }
+
+  vehicles.forEach((vehicle) => {
+    const button = document.createElement("button");
+    button.className = "vehicle-card";
+    button.type = "button";
+    button.dataset.vehicleId = vehicle.vehicleId;
+    button.setAttribute("aria-pressed", String(vehicle.vehicleId === state.selectedVehicleId));
+
+    const top = createElement("span", "alert-card-top");
+    top.append(
+      createElement("strong", "", vehicle.vehicleNumber),
+      createElement("span", `badge ${vehicle.bindingStatus}`, titleCase(vehicle.bindingStatus)),
+    );
+
+    const meta = createElement("span", "alert-card-meta");
+    meta.textContent = `${vehicle.plateNumber} · ${vehicle.deviceId}`;
+
+    const foot = createElement("span", "alert-card-foot");
+    foot.textContent = `${titleCase(vehicle.onlineStatus)} · ${vehicle.driverUserId || "No driver"}`;
+
+    button.append(top, meta, foot);
+    button.addEventListener("click", () => {
+      state.selectedVehicleId = vehicle.vehicleId;
+      populateVehicleForm(vehicle);
+      renderWarehouse();
+    });
+    list.append(button);
+  });
+};
+
+const renderVehicleDetail = () => {
+  const vehicle = selectedVehicle();
+  if (!vehicle) {
+    [
+      "warehouse-detail-number",
+      "warehouse-detail-plate",
+      "warehouse-detail-device",
+      "warehouse-detail-driver",
+      "warehouse-detail-warehouse",
+      "warehouse-detail-last-seen",
+    ].forEach((id) => setText(id, "-"));
+    setText("warehouse-selected-status", "-");
+    $("warehouse-selected-status").className = "badge";
+    $("disable-warehouse-vehicle").disabled = true;
+    $("unbind-warehouse-vehicle").disabled = true;
+    return;
+  }
+
+  setText("warehouse-selected-status", titleCase(vehicle.bindingStatus));
+  $("warehouse-selected-status").className = `badge ${vehicle.bindingStatus}`;
+  setText("warehouse-detail-number", vehicle.vehicleNumber);
+  setText("warehouse-detail-plate", vehicle.plateNumber);
+  setText("warehouse-detail-device", vehicle.deviceId);
+  setText("warehouse-detail-driver", vehicle.driverUserId || "-");
+  setText("warehouse-detail-warehouse", vehicle.warehouseId);
+  setText("warehouse-detail-last-seen", formatDate(vehicle.lastSeenAt));
+  $("disable-warehouse-vehicle").disabled = vehicle.bindingStatus === "disabled";
+  $("unbind-warehouse-vehicle").disabled = vehicle.bindingStatus !== "bound";
+};
+
+const renderAvailableVehicleSelect = () => {
+  const select = $("warehouse-available-vehicle");
+  const available = state.vehicles.filter((vehicle) => vehicle.bindingStatus === "available");
+  select.replaceChildren();
+  if (available.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No available vehicles";
+    select.append(option);
+    select.disabled = true;
+    $("bind-cargo").disabled = true;
+    setText("warehouse-binding-hint", "Create or unbind a vehicle first");
+    return;
+  }
+
+  available.forEach((vehicle) => {
+    const option = document.createElement("option");
+    option.value = vehicle.vehicleId;
+    option.textContent = `${vehicle.vehicleNumber} · ${vehicle.plateNumber} · ${vehicle.driverUserId || "driver required"}`;
+    select.append(option);
+  });
+  if (selectedVehicle()?.bindingStatus === "available") {
+    select.value = state.selectedVehicleId;
+  }
+  select.disabled = false;
+  $("bind-cargo").disabled = false;
+  setText("warehouse-binding-hint", `${available.length} vehicle${available.length === 1 ? "" : "s"} ready`);
+};
+
+const populateVehicleForm = (vehicle) => {
+  $("warehouse-edit-vehicle-id").value = vehicle.vehicleId;
+  $("warehouse-vehicle-id").value = vehicle.vehicleId;
+  $("warehouse-vehicle-id").disabled = true;
+  $("warehouse-vehicle-number").value = vehicle.vehicleNumber;
+  $("warehouse-plate-number").value = vehicle.plateNumber;
+  $("warehouse-device-id").value = vehicle.deviceId;
+  $("warehouse-driver-id").value = vehicle.driverUserId || "";
+  $("warehouse-online-status").value = vehicle.onlineStatus;
+  $("warehouse-notes").value = vehicle.notes || "";
+  setText("warehouse-form-mode", "Update");
+};
+
+const resetVehicleForm = () => {
+  $("warehouse-vehicle-form").reset();
+  $("warehouse-edit-vehicle-id").value = "";
+  $("warehouse-vehicle-id").disabled = false;
+  setText("warehouse-form-mode", "Create");
+};
+
+const vehiclePayloadFromForm = () => {
+  const payload = {
+    vehicleNumber: $("warehouse-vehicle-number").value.trim(),
+    plateNumber: $("warehouse-plate-number").value.trim(),
+    deviceId: $("warehouse-device-id").value.trim(),
+    driverUserId: $("warehouse-driver-id").value.trim() || null,
+    onlineStatus: $("warehouse-online-status").value,
+    notes: $("warehouse-notes").value.trim() || null,
+  };
+  if (!$("warehouse-edit-vehicle-id").value && $("warehouse-vehicle-id").value.trim()) {
+    payload.vehicleId = $("warehouse-vehicle-id").value.trim();
+  }
+  return payload;
+};
+
+const saveVehicle = async (event) => {
+  event.preventDefault();
+  setStatus("Saving vehicle", "loading");
+  const editingVehicleId = $("warehouse-edit-vehicle-id").value;
+  const saved = await requestJson(
+    editingVehicleId
+      ? `/api/vehicles/${encodeURIComponent(editingVehicleId)}`
+      : "/api/vehicles",
+    {
+      method: editingVehicleId ? "PATCH" : "POST",
+      body: JSON.stringify(vehiclePayloadFromForm()),
+      authHeaders: warehouseAuthHeaders,
+    },
+  );
+  state.selectedVehicleId = saved.vehicle.vehicleId;
+  populateVehicleForm(saved.vehicle);
+  await loadWarehouse();
+  renderWarehouseResult(`${saved.vehicle.vehicleNumber} saved`, "ok");
+};
+
+const disableSelectedVehicle = async () => {
+  const vehicle = selectedVehicle();
+  if (!vehicle) {
+    return;
+  }
+  setStatus("Disabling vehicle", "loading");
+  const payload = await requestJson(`/api/vehicles/${encodeURIComponent(vehicle.vehicleId)}/disable`, {
+    method: "POST",
+    body: JSON.stringify({ reason: "Warehouse maintenance hold" }),
+    authHeaders: warehouseAuthHeaders,
+  });
+  state.selectedVehicleId = payload.vehicle.vehicleId;
+  await loadWarehouse();
+  renderWarehouseResult(`${payload.vehicle.vehicleNumber} disabled`, "warning");
+};
+
+const unbindSelectedVehicle = async () => {
+  const vehicle = selectedVehicle();
+  if (!vehicle) {
+    return;
+  }
+  setStatus("Unbinding vehicle", "loading");
+  const payload = await requestJson(`/api/vehicles/${encodeURIComponent(vehicle.vehicleId)}/unbind`, {
+    method: "POST",
+    body: JSON.stringify({ reason: "Warehouse manual release" }),
+    authHeaders: warehouseAuthHeaders,
+  });
+  state.selectedVehicleId = payload.vehicle.vehicleId;
+  await loadWarehouse();
+  renderWarehouseResult(`${payload.vehicle.vehicleNumber} is available`, "ok");
+};
+
+const bindCargo = async (event) => {
+  event.preventDefault();
+  setStatus("Binding cargo", "loading");
+  const payload = {
+    cargoId: $("warehouse-cargo-id").value.trim(),
+    vehicleId: $("warehouse-available-vehicle").value,
+  };
+  const driverUserId = $("warehouse-binding-driver").value.trim();
+  const taskNumber = $("warehouse-task-number").value.trim();
+  if (driverUserId) {
+    payload.driverUserId = driverUserId;
+  }
+  if (taskNumber) {
+    payload.taskNumber = taskNumber;
+  }
+  const result = await requestJson("/api/cargo-bindings", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    authHeaders: warehouseAuthHeaders,
+  });
+  state.selectedVehicleId = result.binding.vehicle.vehicleId;
+  await loadWarehouse();
+  renderWarehouseResult(
+    `${result.binding.cargoNumber} bound to ${result.binding.vehicle.vehicleNumber} as ${result.binding.taskNumber}`,
+    "ok",
+  );
+};
+
+const renderWarehouseResult = (message, tone) => {
+  const result = $("warehouse-result");
+  result.hidden = false;
+  result.dataset.tone = tone;
+  result.textContent = message;
+};
+
 const openAlertEntry = async (alertId) => {
   if (!alertId) {
     return;
@@ -1191,6 +1461,7 @@ const wireEvents = () => {
   });
   $("refresh-distribution").addEventListener("click", () => loadDistribution().catch(handleError));
   $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
+  $("refresh-warehouse").addEventListener("click", () => loadWarehouse().catch(handleError));
   $("refresh-logs").addEventListener("click", () => loadLogs().catch(handleError));
   $("refresh-shipper").addEventListener("click", () => loadShipperDetail().catch(handleError));
   $("refresh-driver").addEventListener("click", () => loadDriverTasks().catch(handleError));
@@ -1213,6 +1484,29 @@ const wireEvents = () => {
     loadLogs().catch(handleError);
   });
   $("export-logs").addEventListener("click", () => exportLogs().catch(handleError));
+  $("warehouse-vehicle-form").addEventListener("submit", (event) =>
+    saveVehicle(event).catch(handleError),
+  );
+  $("reset-warehouse-vehicle").addEventListener("click", resetVehicleForm);
+  $("disable-warehouse-vehicle").addEventListener("click", () =>
+    disableSelectedVehicle().catch(handleError),
+  );
+  $("unbind-warehouse-vehicle").addEventListener("click", () =>
+    unbindSelectedVehicle().catch(handleError),
+  );
+  $("warehouse-binding-form").addEventListener("submit", (event) =>
+    bindCargo(event).catch(handleError),
+  );
+  document.querySelectorAll(".warehouse-filter").forEach((button) => {
+    button.addEventListener("click", () => {
+      document
+        .querySelectorAll(".warehouse-filter")
+        .forEach((item) => item.classList.remove("is-active"));
+      button.classList.add("is-active");
+      state.vehicleFilter = button.dataset.filter || "all";
+      renderVehicleList();
+    });
+  });
   $("open-vehicle-alert").addEventListener("click", () =>
     openSelectedVehicleAlert().catch(handleError),
   );
@@ -1285,6 +1579,11 @@ const switchView = (view) => {
       "ok",
     );
   }
+  if (state.activeView === "warehouse" && state.vehicles.length === 0) {
+    loadWarehouse().catch(handleError);
+  } else if (state.activeView === "warehouse") {
+    setStatus(`${state.vehicles.length} warehouse vehicle${state.vehicles.length === 1 ? "" : "s"}`, "ok");
+  }
   if (state.activeView === "shipper" && !state.shipper.snapshot) {
     loadShipperDetail().catch(handleError);
   } else if (state.activeView === "shipper" && state.shipper.snapshot) {
@@ -1294,6 +1593,9 @@ const switchView = (view) => {
 
 const handleError = (error) => {
   setStatus(error.message, "error");
+  if (state.activeView === "warehouse") {
+    renderWarehouseResult(error.message, "error");
+  }
 };
 
 const populateRoleSelect = () => {

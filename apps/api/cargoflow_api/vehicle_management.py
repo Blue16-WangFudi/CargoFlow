@@ -78,6 +78,17 @@ class VehicleStore:
                     last_seen_at=_parse_datetime("2026-05-13T10:00:03+00:00"),
                     notes="Demo shipment vehicle",
                 ),
+                Vehicle(
+                    id="vehicle-available-001",
+                    warehouse_id="warehouse-shanghai",
+                    vehicle_number="VH-AVAILABLE-001",
+                    plate_number="SH-BIND-001",
+                    device_id="gps-bind-001",
+                    driver_user_id="driver-bind",
+                    online_status=VehicleOnlineStatus.OFFLINE,
+                    binding_status=VehicleBindingStatus.AVAILABLE,
+                    notes="Ready for pending cargo assignment",
+                ),
             )
         )
 

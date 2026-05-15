@@ -17,6 +17,7 @@
         <nav class="mode-tabs" aria-label="Workspace views">
           <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch Map</button>
           <button class="mode-tab" type="button" data-view="alert-handling">Alert Handling</button>
+          <button class="mode-tab" type="button" data-view="warehouse">Warehouse</button>
           <button class="mode-tab" type="button" data-view="driver">Driver Workspace</button>
           <button class="mode-tab" type="button" data-view="admin-logs">Admin Logs</button>
           <button class="mode-tab" type="button" data-view="shipper">Shipper Detail</button>
@@ -447,6 +448,165 @@
               <span id="command-count" class="hint">0 commands</span>
             </div>
             <div class="command-list" id="command-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section class="warehouse-workspace view-panel" id="warehouse-view" aria-label="Warehouse vehicle and binding workspace">
+        <aside class="queue-panel" aria-labelledby="warehouse-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Warehouse Admin</p>
+              <h2 id="warehouse-title">Vehicles</h2>
+            </div>
+            <button class="icon-button" id="refresh-warehouse" type="button" title="Refresh vehicles" aria-label="Refresh vehicles">
+              &#8635;
+            </button>
+          </div>
+          <div class="filter-row warehouse-filter-row" role="group" aria-label="Vehicle binding filter">
+            <button class="filter-button warehouse-filter is-active" type="button" data-filter="all">All</button>
+            <button class="filter-button warehouse-filter" type="button" data-filter="available">Available</button>
+            <button class="filter-button warehouse-filter" type="button" data-filter="bound">Bound</button>
+          </div>
+          <div class="vehicle-list" id="warehouse-vehicle-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="warehouse-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Vehicle Operations</p>
+              <h2 id="warehouse-detail-title">Maintenance & Binding</h2>
+            </div>
+            <div class="alert-summary" id="warehouse-summary">Waiting for vehicles</div>
+          </div>
+
+          <div class="metric-grid warehouse-metrics">
+            <article class="metric-card">
+              <span>Available</span>
+              <strong id="warehouse-available-count">0</strong>
+              <small>Ready to bind</small>
+            </article>
+            <article class="metric-card">
+              <span>Bound</span>
+              <strong id="warehouse-bound-count">0</strong>
+              <small>In active use</small>
+            </article>
+            <article class="metric-card">
+              <span>Disabled</span>
+              <strong id="warehouse-disabled-count">0</strong>
+              <small>Blocked from binding</small>
+            </article>
+          </div>
+
+          <div class="warehouse-grid">
+            <form class="info-panel form-panel" id="warehouse-vehicle-form">
+              <div class="section-header compact">
+                <h3>Vehicle Maintenance</h3>
+                <span class="hint" id="warehouse-form-mode">Create</span>
+              </div>
+              <input id="warehouse-edit-vehicle-id" name="editVehicleId" type="hidden" />
+              <div class="form-grid">
+                <label>
+                  Vehicle ID
+                  <input id="warehouse-vehicle-id" name="vehicleId" type="text" autocomplete="off" placeholder="vehicle-sh-002" />
+                </label>
+                <label>
+                  Vehicle number
+                  <input id="warehouse-vehicle-number" name="vehicleNumber" type="text" autocomplete="off" placeholder="VH-SH-002" required />
+                </label>
+                <label>
+                  Plate number
+                  <input id="warehouse-plate-number" name="plateNumber" type="text" autocomplete="off" placeholder="SH-D12345" required />
+                </label>
+                <label>
+                  Device ID
+                  <input id="warehouse-device-id" name="deviceId" type="text" autocomplete="off" placeholder="gps-sh-002" required />
+                </label>
+                <label>
+                  Driver ID
+                  <input id="warehouse-driver-id" name="driverUserId" type="text" autocomplete="off" placeholder="driver-sh-002" />
+                </label>
+                <label>
+                  Online status
+                  <select id="warehouse-online-status" name="onlineStatus">
+                    <option value="offline">Offline</option>
+                    <option value="online">Online</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Notes
+                <textarea id="warehouse-notes" name="notes" rows="3" placeholder="Inspection notes"></textarea>
+              </label>
+              <div class="filter-actions">
+                <button class="primary-button" id="save-warehouse-vehicle" type="submit">Save</button>
+                <button class="neutral-button" id="reset-warehouse-vehicle" type="button">New</button>
+              </div>
+            </form>
+
+            <article class="info-panel" aria-labelledby="warehouse-selected-title">
+              <div class="section-header compact">
+                <h3 id="warehouse-selected-title">Selected Vehicle</h3>
+                <span class="badge" id="warehouse-selected-status">-</span>
+              </div>
+              <dl class="info-list" id="warehouse-vehicle-detail">
+                <div>
+                  <dt>Vehicle</dt>
+                  <dd id="warehouse-detail-number">-</dd>
+                </div>
+                <div>
+                  <dt>Plate</dt>
+                  <dd id="warehouse-detail-plate">-</dd>
+                </div>
+                <div>
+                  <dt>Device</dt>
+                  <dd id="warehouse-detail-device">-</dd>
+                </div>
+                <div>
+                  <dt>Driver</dt>
+                  <dd id="warehouse-detail-driver">-</dd>
+                </div>
+                <div>
+                  <dt>Warehouse</dt>
+                  <dd id="warehouse-detail-warehouse">-</dd>
+                </div>
+                <div>
+                  <dt>Last seen</dt>
+                  <dd id="warehouse-detail-last-seen">-</dd>
+                </div>
+              </dl>
+              <div class="action-toolbar" aria-label="Vehicle actions">
+                <button class="secondary-button compact-button" id="disable-warehouse-vehicle" type="button">Disable</button>
+                <button class="neutral-button compact-button" id="unbind-warehouse-vehicle" type="button">Unbind</button>
+              </div>
+            </article>
+          </div>
+
+          <section class="info-panel binding-panel" aria-labelledby="warehouse-binding-title">
+            <div class="section-header compact">
+              <h3 id="warehouse-binding-title">Cargo Binding</h3>
+              <span id="warehouse-binding-hint" class="hint">Select an available vehicle</span>
+            </div>
+            <form class="binding-form" id="warehouse-binding-form">
+              <label>
+                Cargo ID
+                <input id="warehouse-cargo-id" name="cargoId" type="text" value="cargo-pending-001" autocomplete="off" required />
+              </label>
+              <label>
+                Available vehicle
+                <select id="warehouse-available-vehicle" name="vehicleId" required></select>
+              </label>
+              <label>
+                Driver override
+                <input id="warehouse-binding-driver" name="driverUserId" type="text" autocomplete="off" placeholder="Use vehicle driver" />
+              </label>
+              <label>
+                Task number
+                <input id="warehouse-task-number" name="taskNumber" type="text" autocomplete="off" placeholder="Optional" />
+              </label>
+              <button class="primary-button" id="bind-cargo" type="submit">Bind Cargo</button>
+            </form>
+            <div class="notice-panel" id="warehouse-result" hidden></div>
           </section>
         </section>
       </section>
