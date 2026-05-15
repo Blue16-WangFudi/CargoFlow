@@ -41,6 +41,7 @@ const roleProfiles = {
 const workspaceEntries = [
   {
     id: "owner-shipment",
+    view: "shipper",
     label: "Shipment Detail",
     eyebrow: "Cargo Owner",
     roles: ["cargo_owner"],
@@ -68,6 +69,7 @@ const workspaceEntries = [
   },
   {
     id: "dispatch-alerts",
+    view: "alert-handling",
     label: "Alert Command Desk",
     eyebrow: "Dispatch",
     roles: ["dispatcher"],
@@ -77,24 +79,27 @@ const workspaceEntries = [
   },
   {
     id: "dispatch-map",
+    view: "dispatch",
     label: "Vehicle Distribution",
     eyebrow: "Dispatch",
     roles: ["dispatcher"],
     endpoint: "/api/vehicles",
     summary: "Scan online vehicles, transport status, and active alert hotspots.",
-    status: "Planned UI",
+    status: "Live UI",
   },
   {
     id: "driver-tasks",
+    view: "driver",
     label: "Driver Tasks",
     eyebrow: "Driver",
     roles: ["driver"],
     endpoint: "/api/shipments/CGF-DEMO-001/trajectory",
     summary: "View assigned route context, command requests, and status reporting steps.",
-    status: "Planned UI",
+    status: "Live UI",
   },
   {
     id: "admin-alert-logs",
+    view: "admin-logs",
     label: "Alert Logs",
     eyebrow: "System Admin",
     roles: ["system_admin"],
