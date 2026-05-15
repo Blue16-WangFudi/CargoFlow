@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CargoFlow Operations Console</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">CargoFlow Operations</p>
+          <h1 id="page-title">Operations Console</h1>
+        </div>
+        <nav class="mode-tabs" aria-label="Workspace views">
+          <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch Map</button>
+          <button class="mode-tab" type="button" data-view="alert-handling">Alert Handling</button>
+          <button class="mode-tab" type="button" data-view="driver">Driver Workspace</button>
+          <button class="mode-tab" type="button" data-view="admin-logs">Admin Logs</button>
+          <button class="mode-tab" type="button" data-view="shipper">Shipper Detail</button>
+        </nav>
+        <div class="service-status" id="service-status" data-state="loading">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">Checking API</span>
+        </div>
+      </section>
+
+      <section class="shipper-workspace view-panel" id="shipper-view" aria-label="Shipper cargo detail">
+        <aside class="queue-panel" aria-labelledby="shipper-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Cargo Owner</p>
+              <h2 id="shipper-title">Cargo Detail</h2>
+            </div>
+            <button class="icon-button" id="refresh-shipper" type="button" title="Refresh shipment" aria-label="Refresh shipment">
+              &#8635;
+            </button>
+          </div>
+
+          <div class="shipment-card" aria-live="polite">
+            <span class="shipment-number" id="shipper-shipment-id">CGF-DEMO-001</span>
+            <strong id="shipper-cargo-label">cargo-demo-001</strong>
+            <span id="shipper-cargo-owner">Acme Export</span>
+          </div>
+
+          <div class="quick-actions" aria-label="Cargo detail shortcuts">
+            <button class="primary-button" id="show-trajectory" type="button">Trajectory</button>
+            <button class="neutral-button" id="show-alerts" type="button">Alerts</button>
+          </div>
+
+          <dl class="info-list compact-list">
+            <div>
+              <dt>Transport</dt>
+              <dd id="shipper-transport-status">-</dd>
+            </div>
+            <div>
+              <dt>Vehicle</dt>
+              <dd id="shipper-vehicle-number">-</dd>
+            </div>
+            <div>
+              <dt>Plate</dt>
+              <dd id="shipper-plate-number">-</dd>
+            </div>
+            <div>
+              <dt>Device</dt>
+              <dd id="shipper-device-id">-</dd>
+            </div>
+          </dl>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="shipper-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Shipment Snapshot</p>
+              <h2 id="shipper-detail-title">Live Cargo Status</h2>
+            </div>
+            <div class="alert-summary" id="shipper-summary">Waiting for shipment data</div>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric-card">
+              <span>Location Update</span>
+              <strong id="shipper-location-updated">-</strong>
+              <small id="shipper-location-coordinate">-</small>
+            </article>
+            <article class="metric-card">
+              <span>ETA</span>
+              <strong id="shipper-eta-arrival">-</strong>
+              <small id="shipper-eta-distance">-</small>
+            </article>
+            <article class="metric-card">
+              <span>Delay Hint</span>
+              <strong id="shipper-delay-status">-</strong>
+              <small id="shipper-delay-message">-</small>
+            </article>
+          </div>
+
+          <div class="shipper-detail-grid">
+            <article class="info-panel route-panel" aria-labelledby="route-title">
+              <div class="section-header compact">
+                <h3 id="route-title">Route Position</h3>
+                <span class="badge" id="shipper-location-state">-</span>
+              </div>
+              <div class="route-canvas" id="route-canvas" aria-label="Cargo route overview"></div>
+            </article>
+
+            <article class="info-panel">
+              <div class="section-header compact">
+                <h3>Cargo & ETA</h3>
+                <span class="hint" id="shipper-eta-status">-</span>
+              </div>
+              <dl class="info-list">
+                <div>
+                  <dt>Cargo</dt>
+                  <dd id="shipper-cargo-description">-</dd>
+                </div>
+                <div>
+                  <dt>Destination</dt>
+                  <dd id="shipper-destination">-</dd>
+                </div>
+                <div>
+                  <dt>Driver</dt>
+                  <dd id="shipper-driver">-</dd>
+                </div>
+                <div>
+                  <dt>Calculated</dt>
+                  <dd id="shipper-eta-calculated">-</dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+
+          <section class="info-panel trajectory-panel" id="shipper-trajectory-section" aria-labelledby="shipper-trajectory-title">
+            <div class="section-header compact">
+              <h3 id="shipper-trajectory-title">Trajectory Replay</h3>
+              <span id="shipper-trajectory-count" class="hint">0 points</span>
+            </div>
+            <div class="trajectory-list" id="shipper-trajectory-list"></div>
+          </section>
+
+          <section class="info-panel shipper-alert-panel" id="shipper-alerts-section" aria-labelledby="shipper-alerts-title">
+            <div class="section-header compact">
+              <h3 id="shipper-alerts-title">Alert Entry</h3>
+              <span id="shipper-alert-count" class="hint">0 alerts</span>
+            </div>
+            <div class="shipper-alert-list" id="shipper-alert-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section class="driver-workspace view-panel" id="driver-view" aria-label="Driver task and status reporting">
+        <aside class="queue-panel" aria-labelledby="driver-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Driver</p>
+              <h2 id="driver-title">My Tasks</h2>
+            </div>
+            <button class="icon-button" id="refresh-driver" type="button" title="Refresh driver tasks" aria-label="Refresh driver tasks">
+              &#8635;
+            </button>
+          </div>
+          <div class="alert-summary task-summary" id="driver-task-summary">Waiting for tasks</div>
+          <div class="driver-task-list" id="driver-task-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="driver-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Assigned Transport</p>
+              <h2 id="driver-detail-title">Task Detail & Reporting</h2>
+            </div>
+            <span class="badge" id="driver-task-status">-</span>
+          </div>
+
+          <div class="metric-grid driver-metrics">
+            <article class="metric-card">
+              <span>Task</span>
+              <strong id="driver-task-number">-</strong>
+              <small id="driver-shipment-id">-</small>
+            </article>
+            <article class="metric-card">
+              <span>Cargo</span>
+              <strong id="driver-cargo-name">-</strong>
+              <small id="driver-vehicle-label">-</small>
+            </article>
+            <article class="metric-card">
+              <span>Planned Arrival</span>
+              <strong id="driver-planned-arrival">-</strong>
+              <small id="driver-route-label">-</small>
+            </article>
+          </div>
+
+          <div class="driver-detail-grid">
+            <section class="info-panel" aria-labelledby="driver-command-title">
+              <div class="section-header compact">
+                <h3 id="driver-command-title">Dispatch Commands</h3>
+                <span id="driver-command-count" class="hint">0 commands</span>
+              </div>
+              <div class="driver-command-list" id="driver-command-list"></div>
+            </section>
+
+            <form class="info-panel form-panel" id="driver-report-form">
+              <div class="section-header compact">
+                <h3>Status Report</h3>
+                <span class="hint">Forward only</span>
+              </div>
+              <label>
+                Status
+                <select id="driver-report-status" name="reportStatus">
+                  <option value="loaded">Loaded</option>
+                  <option value="in_transit">In Transit</option>
+                  <option value="delivered">Delivered</option>
+                </select>
+              </label>
+              <label>
+                Note
+                <textarea id="driver-report-note" name="note" rows="4">Cargo condition normal.</textarea>
+              </label>
+              <label>
+                Attachment URL
+                <input id="driver-attachment-url" name="attachmentUrl" type="url" autocomplete="off" placeholder="https://example.com/proof.jpg" />
+              </label>
+              <button class="primary-button" id="submit-driver-report" type="submit">Submit Report</button>
+            </form>
+          </div>
+
+          <section class="info-panel driver-history-panel" aria-labelledby="driver-history-title">
+            <div class="section-header compact">
+              <h3 id="driver-history-title">Report History</h3>
+              <span id="driver-report-count" class="hint">0 reports</span>
+            </div>
+            <div class="driver-report-list" id="driver-report-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section class="dispatch-map-workspace view-panel is-active" id="dispatch-view" aria-label="Dispatch vehicle distribution">
+        <aside class="queue-panel" aria-labelledby="distribution-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Dispatcher</p>
+              <h2 id="distribution-title">Vehicle Distribution</h2>
+            </div>
+            <button class="icon-button" id="refresh-distribution" type="button" title="Refresh vehicles" aria-label="Refresh vehicles">
+              &#8635;
+            </button>
+          </div>
+
+          <div class="filter-row distribution-filters" role="group" aria-label="Vehicle distribution filter">
+            <button class="distribution-filter-button is-active" type="button" data-distribution-status="">All</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="online">Online</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="in_transit">In Transit</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="alert">Alerts</button>
+          </div>
+
+          <div class="distribution-summary" aria-label="Vehicle distribution summary">
+            <article>
+              <span>Total</span>
+              <strong id="distribution-total">0</strong>
+            </article>
+            <article>
+              <span>Online</span>
+              <strong id="distribution-online">0</strong>
+            </article>
+            <article>
+              <span>Moving</span>
+              <strong id="distribution-in-transit">0</strong>
+            </article>
+            <article>
+              <span>Alerts</span>
+              <strong id="distribution-alerting">0</strong>
+            </article>
+          </div>
+
+          <div class="vehicle-list" id="vehicle-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="distribution-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Live Map</p>
+              <h2 id="distribution-detail-title">Regional Vehicle Map</h2>
+            </div>
+            <div class="alert-summary" id="distribution-summary-label">Waiting for vehicles</div>
+          </div>
+
+          <div class="distribution-layout">
+            <article class="info-panel map-panel" aria-labelledby="map-title">
+              <div class="section-header compact">
+                <h3 id="map-title">East China Dispatch Region</h3>
+                <span class="hint" id="map-count">0 vehicles</span>
+              </div>
+              <div class="vehicle-map" id="vehicle-map" aria-label="Vehicle location map"></div>
+              <div class="map-legend" aria-label="Map legend">
+                <span><i class="legend-dot online"></i>Online</span>
+                <span><i class="legend-dot delayed"></i>Delayed</span>
+                <span><i class="legend-dot alert"></i>Active alert</span>
+              </div>
+            </article>
+
+            <article class="info-panel vehicle-detail-card" aria-labelledby="vehicle-detail-title">
+              <div class="section-header compact">
+                <h3 id="vehicle-detail-title">Selected Vehicle</h3>
+                <span class="badge" id="selected-vehicle-state">-</span>
+              </div>
+              <dl class="info-list compact-list">
+                <div>
+                  <dt>Vehicle</dt>
+                  <dd id="selected-vehicle-number">-</dd>
+                </div>
+                <div>
+                  <dt>Plate</dt>
+                  <dd id="selected-vehicle-plate">-</dd>
+                </div>
+                <div>
+                  <dt>Cargo</dt>
+                  <dd id="selected-vehicle-cargo">-</dd>
+                </div>
+                <div>
+                  <dt>Driver</dt>
+                  <dd id="selected-vehicle-driver">-</dd>
+                </div>
+                <div>
+                  <dt>Location</dt>
+                  <dd id="selected-vehicle-location">-</dd>
+                </div>
+                <div>
+                  <dt>Updated</dt>
+                  <dd id="selected-vehicle-updated">-</dd>
+                </div>
+              </dl>
+              <button class="primary-button vehicle-alert-action" id="open-vehicle-alert" type="button">Open Alert Detail</button>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section class="workspace view-panel" id="alert-handling-view" aria-label="Dispatch alert workspace">
+        <aside class="queue-panel" aria-labelledby="queue-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Queue</p>
+              <h2 id="queue-title">Open Alerts</h2>
+            </div>
+            <button class="icon-button" id="refresh-alerts" type="button" title="Refresh alerts" aria-label="Refresh alerts">
+              &#8635;
+            </button>
+          </div>
+          <div class="filter-row" role="group" aria-label="Alert status filter">
+            <button class="alert-filter-button is-active" type="button" data-status="">All</button>
+            <button class="alert-filter-button" type="button" data-status="pending">Pending</button>
+            <button class="alert-filter-button" type="button" data-status="processing">Processing</button>
+          </div>
+          <div class="alert-list" id="alert-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Selected Alert</p>
+              <h2 id="detail-title">Alert Details</h2>
+            </div>
+            <div class="alert-summary" id="alert-summary">No alert selected</div>
+          </div>
+
+          <div class="detail-grid">
+            <article class="info-panel">
+              <div class="section-header compact">
+                <h3>Incident</h3>
+                <span class="badge" id="alert-status">-</span>
+              </div>
+              <dl class="info-list">
+                <div>
+                  <dt>Alert</dt>
+                  <dd id="alert-number">-</dd>
+                </div>
+                <div>
+                  <dt>Severity</dt>
+                  <dd id="alert-severity">-</dd>
+                </div>
+                <div>
+                  <dt>Type</dt>
+                  <dd id="alert-type">-</dd>
+                </div>
+                <div>
+                  <dt>Vehicle</dt>
+                  <dd id="alert-vehicle">-</dd>
+                </div>
+                <div>
+                  <dt>Cargo</dt>
+                  <dd id="alert-cargo">-</dd>
+                </div>
+                <div>
+                  <dt>Triggered</dt>
+                  <dd id="alert-triggered">-</dd>
+                </div>
+              </dl>
+            </article>
+
+            <article class="info-panel">
+              <div class="section-header compact">
+                <h3>Evidence</h3>
+              </div>
+              <div class="evidence-list" id="evidence-list"></div>
+            </article>
+          </div>
+
+          <section class="workflow-grid" aria-label="Command and closure workflow">
+            <form class="info-panel form-panel" id="command-form">
+              <div class="section-header compact">
+                <h3>Create Command</h3>
+                <span class="hint">Driver target</span>
+              </div>
+              <label>
+                Target ID
+                <input id="command-target" name="targetId" type="text" value="driver-demo" autocomplete="off" />
+              </label>
+              <label>
+                Command
+                <textarea id="command-content" name="content" rows="4">Inspect cargo seal and confirm box status.</textarea>
+              </label>
+              <button class="primary-button" id="send-command" type="submit">Send Command</button>
+            </form>
+
+            <form class="info-panel form-panel" id="close-form">
+              <div class="section-header compact">
+                <h3>Close Alert</h3>
+                <span class="hint">Audit required</span>
+              </div>
+              <label>
+                Close reason
+                <textarea id="close-reason" name="closeReason" rows="4">Driver confirmed cargo is secured and the seal is intact.</textarea>
+              </label>
+              <button class="secondary-button" id="close-alert" type="submit">Close Alert</button>
+            </form>
+          </section>
+
+          <section class="info-panel command-panel" aria-labelledby="command-title">
+            <div class="section-header compact">
+              <h3 id="command-title">Command Status</h3>
+              <span id="command-count" class="hint">0 commands</span>
+            </div>
+            <div class="command-list" id="command-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section class="admin-workspace view-panel" id="admin-logs-view" aria-label="System admin alert logs">
+        <aside class="queue-panel" aria-labelledby="log-filter-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">System Admin</p>
+              <h2 id="log-filter-title">Alert Logs</h2>
+            </div>
+            <button class="icon-button" id="refresh-logs" type="button" title="Refresh logs" aria-label="Refresh logs">
+              &#8635;
+            </button>
+          </div>
+          <form class="filter-form" id="log-filter-form">
+            <label>
+              Alert type
+              <select id="log-type" name="type">
+                <option value="">All types</option>
+                <option value="route_deviation">Route deviation</option>
+                <option value="abnormal_stop">Abnormal stop</option>
+                <option value="box_opened">Box opened</option>
+              </select>
+            </label>
+            <label>
+              Severity
+              <select id="log-severity" name="severity">
+                <option value="">All severities</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label>
+              Status
+              <select id="log-status" name="status">
+                <option value="">All statuses</option>
+                <option value="pending">Pending</option>
+                <option value="processing">Processing</option>
+                <option value="closed">Closed</option>
+                <option value="false_positive">False positive</option>
+              </select>
+            </label>
+            <label>
+              Vehicle ID
+              <input id="log-vehicle" name="vehicleId" type="text" autocomplete="off" placeholder="vehicle-demo-001" />
+            </label>
+            <label>
+              Cargo ID
+              <input id="log-cargo" name="cargoId" type="text" autocomplete="off" placeholder="cargo-demo-001" />
+            </label>
+            <label>
+              Triggered from
+              <input id="log-from" name="triggeredFrom" type="datetime-local" />
+            </label>
+            <label>
+              Triggered to
+              <input id="log-to" name="triggeredTo" type="datetime-local" />
+            </label>
+            <div class="filter-actions">
+              <button class="primary-button" type="submit">Apply</button>
+              <button class="secondary-button" id="reset-log-filters" type="button">Reset</button>
+            </div>
+          </form>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="log-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Audit Trail</p>
+              <h2 id="log-title">Filtered Alert Logs</h2>
+            </div>
+            <div class="log-actions">
+              <span class="alert-summary" id="log-count">0 logs</span>
+              <button class="secondary-button compact-button" id="export-logs" type="button">Export</button>
+            </div>
+          </div>
+
+          <div class="log-table" id="log-table" aria-live="polite"></div>
+
+          <section class="info-panel chain-panel" aria-labelledby="chain-title">
+            <div class="section-header compact">
+              <h3 id="chain-title">Handling Chain</h3>
+              <span id="chain-summary" class="hint">Select a log</span>
+            </div>
+            <div class="chain-grid" id="chain-grid"></div>
+          </section>
+
+          <section class="info-panel export-panel" id="export-panel" aria-labelledby="export-title" hidden>
+            <div class="section-header compact">
+              <h3 id="export-title">Export Preview</h3>
+              <span id="export-meta" class="hint">JSON</span>
+            </div>
+            <pre id="export-preview"></pre>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

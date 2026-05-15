@@ -1,0 +1,89 @@
+name: Auto Merge Approved PR
+
+on:
+  pull_request_review:
+    types:
+      - submitted
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+  actions: read
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'pull_request_review' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Check approval signal
+        id: approval
+        run: python scripts/github/approval_gate.py
+
+      - name: Resolve pull request
+        id: pr
+        if: steps.approval.outputs.approved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMENT_PR_URL: ${{ github.event.issue.pull_request.url }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request_review" ]; then
+            pr_number="$REVIEW_PR_NUMBER"
+          else
+            pr_number="${COMMENT_PR_URL##*/}"
+          fi
+          pr_url="$(gh pr view "$pr_number" --json url --jq .url)"
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for required checks
+        if: steps.approval.outputs.approved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          for _ in $(seq 1 40); do
+            output="$(gh pr checks "$PR_NUMBER" || true)"
+            echo "$output"
+            if echo "$output" | grep -Eq 'fail|cancel|timed out'; then
+              exit 1
+            fi
+            if echo "$output" | grep -q 'pass' && ! echo "$output" | grep -Eq 'pending|queued|in_progress'; then
+              exit 0
+            fi
+            sleep 15
+          done
+          gh pr checks "$PR_NUMBER"
+          exit 1
+
+      - name: Merge pull request
+        if: steps.approval.outputs.approved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: gh pr merge "$PR_NUMBER" --squash --delete-branch
+
+      - name: Mark CargoFlow task complete
+        if: steps.approval.outputs.approved == 'true'
+        env:
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+          CARGOFLOW_BASE_TOKEN: ${{ vars.CARGOFLOW_BASE_TOKEN }}
+          CARGOFLOW_TASK_TABLE_ID: ${{ vars.CARGOFLOW_TASK_TABLE_ID }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: python scripts/github/complete_lark_task.py
