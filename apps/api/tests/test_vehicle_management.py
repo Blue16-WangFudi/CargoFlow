@@ -114,8 +114,23 @@ class VehicleStoreTests(unittest.TestCase):
         self.assertEqual(created.id, "vehicle-2")
         self.assertEqual([vehicle.id for vehicle in vehicles], ["vehicle-1", "vehicle-2"])
 
+    def test_create_rejects_duplicate_device_id(self) -> None:
+        with self.assertRaises(VehicleConflictError) as ctx:
+            self.store.create_vehicle(
+                {
+                    "vehicleId": "vehicle-2",
+                    "warehouseId": "warehouse-1",
+                    "vehicleNumber": "VH-002",
+                    "plateNumber": "SH-B12345",
+                    "deviceId": "gps-001",
+                },
+                WAREHOUSE_ADMIN,
+            )
+        self.assertEqual(ctx.exception.error_code, "vehicle_conflict")
+        self.assertIn("deviceId", ctx.exception.message)
+
     def test_create_rejects_duplicate_plate_number(self) -> None:
-        with self.assertRaises(VehicleConflictError):
+        with self.assertRaises(VehicleConflictError) as ctx:
             self.store.create_vehicle(
                 {
                     "vehicleId": "vehicle-2",
@@ -126,6 +141,7 @@ class VehicleStoreTests(unittest.TestCase):
                 },
                 WAREHOUSE_ADMIN,
             )
+        self.assertIn("plateNumber", ctx.exception.message)
 
     def test_create_rejects_duplicate_vehicle_id(self) -> None:
         with self.assertRaises(VehicleConflictError):

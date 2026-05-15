@@ -321,6 +321,19 @@ class CargoBindingStore:
         with self._lock:
             return self._tasks.get(task_id)
 
+    def vehicle_has_active_task(self, vehicle_id: str) -> bool:
+        """Return True when the vehicle is currently assigned to a non-terminal transport task."""
+        with self._lock:
+            return self._active_task_by_vehicle.get(vehicle_id) is not None
+
+    def task_for_vehicle(self, vehicle_id: str) -> TransportTask | None:
+        """Return the active transport task for a vehicle, or None."""
+        with self._lock:
+            task_id = self._active_task_by_vehicle.get(vehicle_id)
+            if task_id is None:
+                return None
+            return self._tasks.get(task_id)
+
     def _cargo_for(self, cargo_id: str) -> CargoBindingCargo:
         try:
             return self._cargos[cargo_id]
