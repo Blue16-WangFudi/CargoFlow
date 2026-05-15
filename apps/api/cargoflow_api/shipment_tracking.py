@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 from cargoflow_api.access_control import Principal, ShipmentScope, require_shipment_access
+from cargoflow_api.driver_status_reporting import (
+    DriverStatusReportPayload,
+    ensure_forward_transition,
+    require_assigned_driver_report_access,
+)
 from cargoflow_api.domain import (
     AlertSeverity,
     AlertType,
+    StatusReport,
     StatusReportState,
     TransportTaskStatus,
 )
@@ -160,6 +167,84 @@ class ShipmentTrackingStore:
                 if alias:
                     self._aliases[alias] = record.shipment_id
 
+    def update_transport_status(
+        self,
+        shipment_id: str,
+        status: TransportTaskStatus,
+    ) -> ShipmentTrackingRecord:
+        with self._lock:
+            normalized = self._aliases.get(shipment_id, shipment_id)
+            try:
+                record = self._records[normalized]
+            except KeyError as exc:
+                raise ShipmentTrackingError(
+                    "shipment_not_found",
+                    f"No bound shipment found for {shipment_id}",
+                    HTTPStatus.NOT_FOUND,
+                ) from exc
+            updated = replace(record, transport_status=status)
+            self._records[normalized] = updated
+            return updated
+
+    def add_status_report(
+        self,
+        task_id: str,
+        report_status: StatusReportState,
+        reporter_user_id: str,
+        reported_at: datetime,
+        *,
+        report_id: str | None = None,
+        note: str | None = None,
+    ) -> ShipmentTrackingRecord | None:
+        with self._lock:
+            for shipment_id, record in self._records.items():
+                if record.task_id != task_id:
+                    continue
+                report = TrajectoryStatusReportPoint(
+                    report_id=report_id or f"tracking-report-{uuid4().hex}",
+                    report_status=report_status,
+                    reporter_user_id=reporter_user_id,
+                    reported_at=reported_at,
+                    note=note,
+                )
+                updated = replace(
+                    record,
+                    transport_status=_transport_status_for_report(report_status),
+                    status_reports=(*record.status_reports, report),
+                )
+                self._records[shipment_id] = updated
+                return updated
+        return None
+
+    def sign_for_delivery(
+        self,
+        shipment_id: str,
+        principal: Principal,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        record = self._record_for(shipment_id)
+        require_shipment_access(principal, record.scope)
+        if principal.user_id != record.owner_user_id:
+            raise ShipmentTrackingError(
+                "shipment_sign_access_denied",
+                "Only the cargo owner can sign for this shipment.",
+                HTTPStatus.FORBIDDEN,
+            )
+        if record.transport_status is TransportTaskStatus.SIGNED:
+            signed_at = _as_utc(now or datetime.now(UTC))
+            return _signed_payload(record, principal, signed_at)
+        if record.transport_status is not TransportTaskStatus.DELIVERED:
+            raise ShipmentTrackingError(
+                "shipment_not_delivered",
+                "Shipment can only be signed after the driver reports delivered.",
+                HTTPStatus.CONFLICT,
+            )
+
+        signed_at = _as_utc(now or datetime.now(UTC))
+        updated = self.update_transport_status(record.shipment_id, TransportTaskStatus.SIGNED)
+        return _signed_payload(updated, principal, signed_at)
+
     def latest_location_payload(
         self,
         shipment_id: str,
@@ -254,6 +339,40 @@ class ShipmentTrackingStore:
             },
         }
 
+    def add_driver_status_report(
+        self,
+        shipment_id: str,
+        principal: Principal,
+        payload: DriverStatusReportPayload,
+    ) -> tuple[StatusReport, ShipmentTrackingRecord]:
+        with self._lock:
+            record = self._record_for(shipment_id)
+            require_assigned_driver_report_access(principal, record.scope)
+            next_status = ensure_forward_transition(
+                record.transport_status,
+                payload.report_status,
+            )
+            report = StatusReport(
+                id=f"report-{uuid4().hex}",
+                task_id=record.task_id,
+                report_status=payload.report_status,
+                reporter_user_id=principal.user_id,
+                reported_at=payload.reported_at,
+                note=payload.note,
+                attachment_urls=payload.attachment_urls,
+                created_at=datetime.now(UTC).replace(microsecond=0),
+            )
+            updated = replace(
+                record,
+                transport_status=next_status,
+                status_reports=(
+                    *record.status_reports,
+                    TrajectoryStatusReportPoint.from_status_report(report),
+                ),
+            )
+            self._records[record.shipment_id] = updated
+            return report, updated
+
     def _record_for(self, shipment_id: str) -> ShipmentTrackingRecord:
         with self._lock:
             normalized = self._aliases.get(shipment_id, shipment_id)
@@ -313,6 +432,27 @@ def _latest_location_to_wire(
     }
 
 
+def _signed_payload(
+    record: ShipmentTrackingRecord,
+    principal: Principal,
+    signed_at: datetime,
+) -> dict[str, Any]:
+    return {
+        "shipment": {
+            "shipmentId": record.shipment_id,
+            "cargoId": record.cargo_id,
+            "taskId": record.task_id,
+            "transportStatus": record.transport_status.value,
+            "signedAt": signed_at.isoformat(),
+            "signedByUserId": principal.user_id,
+        },
+        "access": {
+            "role": principal.role.value,
+            "principalId": principal.user_id,
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class TrajectoryAlertPoint:
     alert_id: str
@@ -352,12 +492,24 @@ class TrajectoryStatusReportPoint:
     reporter_user_id: str
     reported_at: datetime
     note: str | None = None
+    attachment_urls: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.report_id.strip():
             raise ValueError("report_id must not be blank")
         if not self.reporter_user_id.strip():
             raise ValueError("reporter_user_id must not be blank")
+
+    @classmethod
+    def from_status_report(cls, report: StatusReport) -> "TrajectoryStatusReportPoint":
+        return cls(
+            report_id=report.id,
+            report_status=report.report_status,
+            reporter_user_id=report.reporter_user_id,
+            reported_at=report.reported_at,
+            note=report.note,
+            attachment_urls=report.attachment_urls,
+        )
 
     def to_wire(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -370,6 +522,8 @@ class TrajectoryStatusReportPoint:
         }
         if self.note:
             payload["note"] = self.note
+        if self.attachment_urls:
+            payload["attachmentUrls"] = list(self.attachment_urls)
         return payload
 
 
@@ -452,3 +606,11 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).replace(microsecond=0)
+
+
+def _transport_status_for_report(report_status: StatusReportState) -> TransportTaskStatus:
+    return {
+        StatusReportState.LOADED: TransportTaskStatus.LOADED,
+        StatusReportState.IN_TRANSIT: TransportTaskStatus.IN_TRANSIT,
+        StatusReportState.DELIVERED: TransportTaskStatus.DELIVERED,
+    }[report_status]

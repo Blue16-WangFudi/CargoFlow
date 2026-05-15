@@ -1,9 +1,21 @@
+const navigation = window.CargoFlowNavigation;
+const urlParams = new URLSearchParams(window.location.search);
 const apiBase =
-  new URLSearchParams(window.location.search).get("api") ||
+  urlParams.get("api") ||
   window.localStorage.getItem("cargoflowApiBase") ||
   "http://127.0.0.1:8000";
 
 window.localStorage.setItem("cargoflowApiBase", apiBase);
+
+const initialRole =
+  urlParams.get("role") ||
+  window.localStorage.getItem("cargoflowRole") ||
+  "dispatcher";
+
+const getAuthHeaders = (role) => {
+  const navHeaders = navigation?.authHeadersForRole(role);
+  return Object.keys(navHeaders || {}).length > 0 ? navHeaders : dispatcherAuthHeaders;
+};
 
 const dispatcherAuthHeaders = {
   "X-CargoFlow-User-Id": "dispatcher-demo",
@@ -12,26 +24,14 @@ const dispatcherAuthHeaders = {
   "X-CargoFlow-Dispatch-Region-Ids": "east-china",
 };
 
-const cargoOwnerAuthHeaders = {
-  "X-CargoFlow-User-Id": "owner-acme",
-  "X-CargoFlow-Role": "cargo_owner",
-  "X-CargoFlow-Tenant-Id": "cgf-demo",
-};
+const cargoOwnerAuthHeaders = getAuthHeaders("cargo_owner");
+const systemAdminAuthHeaders = getAuthHeaders("system_admin");
+const driverAuthHeaders = getAuthHeaders("driver");
 
-const systemAdminAuthHeaders = {
-  "X-CargoFlow-User-Id": "admin-demo",
-  "X-CargoFlow-Role": "system_admin",
-  "X-CargoFlow-Tenant-Id": "cgf-demo",
-};
-
-const warehouseAuthHeaders = {
-  "X-CargoFlow-User-Id": "warehouse-admin",
-  "X-CargoFlow-Role": "warehouse_admin",
-  "X-CargoFlow-Tenant-Id": "cgf-demo",
-  "X-CargoFlow-Warehouse-Ids": "warehouse-shanghai",
-};
+const warehouseAuthHeaders = getAuthHeaders("warehouse_admin");
 
 const state = {
+  role: initialRole,
   alerts: [],
   vehicles: [],
   logs: [],
@@ -40,6 +40,20 @@ const state = {
   selectedVehicleId: null,
   statusFilter: "",
   vehicleFilter: "all",
+  distribution: {
+    vehicles: [],
+    selectedVehicleId: null,
+    statusFilter: "",
+    summary: {
+      total: 0,
+      online: 0,
+      inTransit: 0,
+      alerting: 0,
+    },
+  },
+  selectedLogId: null,
+  selectedAlertId: null,
+  statusFilter: "",
   activeView: "dispatch",
   shipper: {
     shipmentId: "CGF-DEMO-001",
@@ -47,6 +61,10 @@ const state = {
     latest: null,
     eta: null,
     trajectory: null,
+  },
+  driver: {
+    tasks: [],
+    selectedTaskId: null,
   },
 };
 
@@ -106,11 +124,24 @@ const formatDistance = (value) => {
   return `${value} km remaining`;
 };
 
+const statusLabel = (vehicle) => {
+  if (!vehicle) {
+    return "-";
+  }
+  if (vehicle.alertSummary?.hasActiveAlert) {
+    return "Active Alert";
+  }
+  if (vehicle.transportStatus === "in_transit") {
+    return "In Transit";
+  }
+  return titleCase(vehicle.onlineStatus || vehicle.bindingStatus);
+};
+
 const requestJson = async (path, options = {}) => {
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
-      ...(options.authHeaders || dispatcherAuthHeaders),
+      ...(options.authHeaders || getAuthHeaders(state.role)),
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     },
@@ -185,6 +216,34 @@ const loadLogs = async () => {
   setStatus(`${payload.count} alert log${payload.count === 1 ? "" : "s"}`, "ok");
 };
 
+const loadDistribution = async () => {
+  setStatus("Loading vehicle distribution", "loading");
+  const query = state.distribution.statusFilter
+    ? `?status=${encodeURIComponent(state.distribution.statusFilter)}`
+    : "";
+  const payload = await requestJson(`/api/dispatch/vehicle-distribution${query}`);
+  state.distribution.vehicles = payload.vehicles || [];
+  state.distribution.summary = payload.summary || {
+    total: 0,
+    online: 0,
+    inTransit: 0,
+    alerting: 0,
+  };
+  if (
+    !state.distribution.vehicles.some(
+      (vehicle) => vehicle.vehicleId === state.distribution.selectedVehicleId,
+    )
+  ) {
+    state.distribution.selectedVehicleId =
+      state.distribution.vehicles.find((vehicle) => vehicle.alertSummary?.hasActiveAlert)
+        ?.vehicleId ||
+      state.distribution.vehicles[0]?.vehicleId ||
+      null;
+  }
+  renderDistribution();
+  setStatus(`${payload.count} mapped vehicle${payload.count === 1 ? "" : "s"}`, "ok");
+};
+
 const loadShipperDetail = async () => {
   setStatus("Loading cargo detail", "loading");
   const snapshot = await requestJson("/api/shipments/demo", {
@@ -212,6 +271,350 @@ const loadShipperDetail = async () => {
   renderShipperDetail();
   setStatus(`${shipmentId} cargo detail ready`, "ok");
 };
+
+const loadDriverTasks = async () => {
+  setStatus("Loading driver tasks", "loading");
+  const payload = await requestJson("/api/driver/tasks", {
+    authHeaders: driverAuthHeaders,
+  });
+  state.driver.tasks = payload.tasks || [];
+  if (!state.driver.tasks.some((task) => task.taskId === state.driver.selectedTaskId)) {
+    state.driver.selectedTaskId =
+      state.driver.tasks.find((task) => task.summary?.unconfirmedCommandCount > 0)?.taskId ||
+      state.driver.tasks[0]?.taskId ||
+      null;
+  }
+  renderDriverWorkspace();
+  setStatus(`${payload.count} driver task${payload.count === 1 ? "" : "s"}`, "ok");
+};
+
+const renderDistribution = () => {
+  const summary = state.distribution.summary;
+  setText("distribution-total", summary.total ?? 0);
+  setText("distribution-online", summary.online ?? 0);
+  setText("distribution-in-transit", summary.inTransit ?? 0);
+  setText("distribution-alerting", summary.alerting ?? 0);
+  setText(
+    "distribution-summary-label",
+    `${state.distribution.vehicles.length} visible · ${summary.alerting ?? 0} alerting`,
+  );
+  setText(
+    "map-count",
+    `${state.distribution.vehicles.length} vehicle${state.distribution.vehicles.length === 1 ? "" : "s"}`,
+  );
+  renderVehicleList();
+  renderVehicleMap();
+  renderSelectedVehicle();
+};
+
+const renderVehicleList = () => {
+  const list = $("vehicle-list");
+  list.replaceChildren();
+  if (state.distribution.vehicles.length === 0) {
+    list.append(emptyMessage("No vehicles match this distribution filter."));
+    return;
+  }
+  state.distribution.vehicles.forEach((vehicle) => {
+    const button = document.createElement("button");
+    button.className = "vehicle-card";
+    button.type = "button";
+    button.dataset.vehicleId = vehicle.vehicleId;
+    button.setAttribute(
+      "aria-pressed",
+      String(vehicle.vehicleId === state.distribution.selectedVehicleId),
+    );
+
+    const top = createElement("span", "vehicle-card-top");
+    top.append(
+      createElement("strong", "", vehicle.vehicleNumber),
+      createElement("span", `badge ${vehicleBadgeClass(vehicle)}`, statusLabel(vehicle)),
+    );
+    const meta = createElement(
+      "span",
+      "vehicle-card-meta",
+      `${vehicle.plateNumber} · ${vehicle.cargoId || "No cargo"}`,
+    );
+    const foot = createElement(
+      "span",
+      "vehicle-card-foot",
+      `${formatCoordinate(vehicle.latestLocation)} · ${formatDate(vehicle.latestLocation?.updatedAt)}`,
+    );
+    button.append(top, meta, foot);
+    button.addEventListener("click", () => {
+      state.distribution.selectedVehicleId = vehicle.vehicleId;
+      renderDistribution();
+    });
+    list.append(button);
+  });
+};
+
+const renderVehicleMap = () => {
+  const map = $("vehicle-map");
+  map.replaceChildren();
+  if (state.distribution.vehicles.length === 0) {
+    map.append(emptyMessage("No vehicle coordinates are available for this filter."));
+    return;
+  }
+
+  const bounds = coordinateBounds(state.distribution.vehicles);
+  state.distribution.vehicles.forEach((vehicle) => {
+    const marker = document.createElement("button");
+    marker.className = `vehicle-marker ${vehicleBadgeClass(vehicle)}`;
+    marker.type = "button";
+    marker.dataset.vehicleId = vehicle.vehicleId;
+    marker.setAttribute(
+      "aria-label",
+      `${vehicle.vehicleNumber} ${statusLabel(vehicle)} at ${formatCoordinate(vehicle.latestLocation)}`,
+    );
+    marker.setAttribute(
+      "aria-pressed",
+      String(vehicle.vehicleId === state.distribution.selectedVehicleId),
+    );
+    const position = mapPosition(vehicle.latestLocation, bounds);
+    marker.style.left = `${position.x}%`;
+    marker.style.top = `${position.y}%`;
+    marker.append(
+      createElement("span", "marker-dot", ""),
+      createElement("strong", "", vehicle.vehicleNumber),
+    );
+    marker.addEventListener("click", () => {
+      state.distribution.selectedVehicleId = vehicle.vehicleId;
+      renderDistribution();
+    });
+    map.append(marker);
+  });
+};
+
+const renderSelectedVehicle = () => {
+  const vehicle = state.distribution.vehicles.find(
+    (item) => item.vehicleId === state.distribution.selectedVehicleId,
+  );
+  if (!vehicle) {
+    setText("selected-vehicle-number", "-");
+    setText("selected-vehicle-plate", "-");
+    setText("selected-vehicle-cargo", "-");
+    setText("selected-vehicle-driver", "-");
+    setText("selected-vehicle-location", "-");
+    setText("selected-vehicle-updated", "-");
+    setText("selected-vehicle-state", "-");
+    $("selected-vehicle-state").className = "badge";
+    $("open-vehicle-alert").disabled = true;
+    return;
+  }
+
+  setText("selected-vehicle-number", vehicle.vehicleNumber);
+  setText("selected-vehicle-plate", vehicle.plateNumber);
+  setText("selected-vehicle-cargo", vehicle.cargoId || "-");
+  setText("selected-vehicle-driver", vehicle.driverUserId || "-");
+  setText("selected-vehicle-location", formatCoordinate(vehicle.latestLocation));
+  setText("selected-vehicle-updated", formatDate(vehicle.latestLocation?.updatedAt));
+  setText("selected-vehicle-state", statusLabel(vehicle));
+  $("selected-vehicle-state").className = `badge ${vehicleBadgeClass(vehicle)}`;
+  $("open-vehicle-alert").disabled = !vehicle.alertSummary?.hasActiveAlert;
+};
+
+const coordinateBounds = (vehicles) => {
+  const longitudes = vehicles.map((vehicle) => Number(vehicle.latestLocation?.longitude));
+  const latitudes = vehicles.map((vehicle) => Number(vehicle.latestLocation?.latitude));
+  return {
+    minLng: Math.min(...longitudes),
+    maxLng: Math.max(...longitudes),
+    minLat: Math.min(...latitudes),
+    maxLat: Math.max(...latitudes),
+  };
+};
+
+const mapPosition = (location, bounds) => {
+  const longitudeRange = bounds.maxLng - bounds.minLng || 1;
+  const latitudeRange = bounds.maxLat - bounds.minLat || 1;
+  const x = 10 + ((Number(location.longitude) - bounds.minLng) / longitudeRange) * 80;
+  const y = 90 - ((Number(location.latitude) - bounds.minLat) / latitudeRange) * 80;
+  return {
+    x: Math.max(7, Math.min(93, x)),
+    y: Math.max(8, Math.min(92, y)),
+  };
+};
+
+const vehicleBadgeClass = (vehicle) => {
+  if (vehicle.alertSummary?.hasActiveAlert) {
+    return vehicle.alertSummary.highestSeverity || "high";
+  }
+  if (vehicle.onlineStatus === "delayed") {
+    return "delayed";
+  }
+  if (vehicle.onlineStatus === "online") {
+    return "online";
+  }
+  return vehicle.onlineStatus || vehicle.bindingStatus || "offline";
+};
+
+const selectedDriverTask = () =>
+  state.driver.tasks.find((task) => task.taskId === state.driver.selectedTaskId);
+
+const renderDriverWorkspace = () => {
+  renderDriverTaskList();
+  renderSelectedDriverTask();
+};
+
+const renderDriverTaskList = () => {
+  const list = $("driver-task-list");
+  list.replaceChildren();
+  const totalCommands = state.driver.tasks.reduce(
+    (sum, task) => sum + (task.summary?.unconfirmedCommandCount || 0),
+    0,
+  );
+  setText(
+    "driver-task-summary",
+    `${state.driver.tasks.length} active · ${totalCommands} requiring confirmation`,
+  );
+  if (state.driver.tasks.length === 0) {
+    list.append(emptyMessage("No active transport tasks are assigned to this driver."));
+    return;
+  }
+
+  state.driver.tasks.forEach((task) => {
+    const button = document.createElement("button");
+    button.className = "driver-task-card";
+    button.type = "button";
+    button.dataset.taskId = task.taskId;
+    button.setAttribute("aria-pressed", String(task.taskId === state.driver.selectedTaskId));
+
+    const top = createElement("span", "driver-task-card-top");
+    top.append(
+      createElement("strong", "", task.taskNumber),
+      createElement("span", `badge ${task.transportStatus}`, titleCase(task.transportStatus)),
+    );
+    const meta = createElement(
+      "span",
+      "driver-task-card-meta",
+      `${task.cargoNumber} · ${task.vehicleNumber}`,
+    );
+    const foot = createElement(
+      "span",
+      "driver-task-card-foot",
+      `${task.origin} -> ${task.destination}`,
+    );
+    const commandHint = createElement(
+      "span",
+      "driver-task-card-meta",
+      `${task.summary?.unconfirmedCommandCount || 0} pending command · ${task.summary?.reportCount || 0} reports`,
+    );
+    button.append(top, meta, foot, commandHint);
+    button.addEventListener("click", () => {
+      state.driver.selectedTaskId = task.taskId;
+      renderDriverWorkspace();
+    });
+    list.append(button);
+  });
+};
+
+const renderSelectedDriverTask = () => {
+  const task = selectedDriverTask();
+  if (!task) {
+    setText("driver-task-number", "-");
+    setText("driver-shipment-id", "-");
+    setText("driver-cargo-name", "-");
+    setText("driver-vehicle-label", "-");
+    setText("driver-planned-arrival", "-");
+    setText("driver-route-label", "-");
+    setText("driver-task-status", "-");
+    $("driver-task-status").className = "badge";
+    $("submit-driver-report").disabled = true;
+    renderDriverCommands([]);
+    renderDriverReports([]);
+    return;
+  }
+
+  setText("driver-task-number", task.taskNumber);
+  setText("driver-shipment-id", task.shipmentId);
+  setText("driver-cargo-name", task.cargoName || task.cargoNumber);
+  setText("driver-vehicle-label", `${task.vehicleNumber} · ${task.plateNumber}`);
+  setText("driver-planned-arrival", formatDate(task.plannedArrivalAt));
+  setText("driver-route-label", `${task.origin} -> ${task.destination}`);
+  setText("driver-task-status", titleCase(task.transportStatus));
+  $("driver-task-status").className = `badge ${task.transportStatus}`;
+  renderDriverCommands(task.commands || []);
+  renderDriverReports(task.statusReports || []);
+  syncDriverReportOptions(task);
+  $("submit-driver-report").disabled = (task.summary?.nextAllowedReports || []).length === 0;
+};
+
+const renderDriverCommands = (commands) => {
+  const list = $("driver-command-list");
+  list.replaceChildren();
+  setText("driver-command-count", `${commands.length} command${commands.length === 1 ? "" : "s"}`);
+  if (commands.length === 0) {
+    list.append(emptyMessage("No dispatch commands are assigned to this task."));
+    return;
+  }
+
+  commands.forEach((command) => {
+    const item = createElement("article", "driver-command-item");
+    const main = createElement("div", "driver-command-main");
+    main.append(
+      createElement("span", `badge ${command.status}`, titleCase(command.status)),
+      createElement("strong", "", command.commandNumber),
+      createElement("p", "", command.content),
+      createElement("small", "", `Issued ${formatDate(command.issuedAt)}`),
+    );
+    const action = createElement(
+      "button",
+      "neutral-button compact-button",
+      driverCommandActionLabel(command),
+    );
+    action.type = "button";
+    action.disabled = isTerminalDriverCommand(command);
+    action.addEventListener("click", () => acknowledgeDriverCommand(command.commandId));
+    item.append(main, action);
+    list.append(item);
+  });
+};
+
+const renderDriverReports = (reports) => {
+  const list = $("driver-report-list");
+  list.replaceChildren();
+  setText("driver-report-count", `${reports.length} report${reports.length === 1 ? "" : "s"}`);
+  if (reports.length === 0) {
+    list.append(emptyMessage("No status reports have been submitted for this task."));
+    return;
+  }
+  reports.forEach((report) => {
+    const item = createElement("article", "driver-report-item");
+    item.append(
+      createElement("span", `badge ${report.reportStatus}`, titleCase(report.reportStatus)),
+      createElement("strong", "", formatDate(report.reportedAt)),
+      createElement("p", "", report.note || "No note"),
+    );
+    if ((report.attachmentUrls || []).length > 0) {
+      item.append(createElement("small", "", `${report.attachmentUrls.length} attachment URL`));
+    }
+    list.append(item);
+  });
+};
+
+const syncDriverReportOptions = (task) => {
+  const allowed = task.summary?.nextAllowedReports || [];
+  const select = $("driver-report-status");
+  Array.from(select.options).forEach((option) => {
+    option.disabled = allowed.length > 0 && !allowed.includes(option.value);
+  });
+  if (!allowed.includes(select.value) && allowed.length > 0) {
+    select.value = allowed[0];
+  }
+};
+
+const driverCommandActionLabel = (command) => {
+  if (command.status === "acknowledged") {
+    return "Confirmed";
+  }
+  if (command.status === "failed" || command.status === "revoked") {
+    return titleCase(command.status);
+  }
+  return "Confirm";
+};
+
+const isTerminalDriverCommand = (command) =>
+  ["acknowledged", "failed", "revoked"].includes(command.status);
 
 const loadWarehouse = async () => {
   setStatus("Loading vehicles", "loading");
@@ -853,14 +1256,25 @@ const openAlertEntry = async (alertId) => {
   if (!alertId) {
     return;
   }
-  switchView("dispatch");
   state.statusFilter = "";
-  document.querySelectorAll(".filter-button").forEach((button) => {
+  document.querySelectorAll(".alert-filter-button").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.status === "");
   });
   state.selectedAlertId = alertId;
+  switchView("alert-handling");
   await loadAlerts();
-  $("dispatch-view").scrollIntoView({ block: "start", behavior: "auto" });
+  $("alert-handling-view").scrollIntoView({ block: "start", behavior: "auto" });
+};
+
+const openSelectedVehicleAlert = async () => {
+  const vehicle = state.distribution.vehicles.find(
+    (item) => item.vehicleId === state.distribution.selectedVehicleId,
+  );
+  const alertId = vehicle?.alertSummary?.alertIds?.[0];
+  if (!alertId) {
+    return;
+  }
+  await openAlertEntry(alertId);
 };
 
 const renderSelectedLogChain = () => {
@@ -986,14 +1400,71 @@ const closeAlert = async (event) => {
   setStatus(`${closed.alert.alertNumber} closed`, "ok");
 };
 
+const acknowledgeDriverCommand = async (commandId) => {
+  setStatus("Confirming command", "loading");
+  await requestJson(`/api/driver/commands/${encodeURIComponent(commandId)}/acknowledge`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    authHeaders: driverAuthHeaders,
+  });
+  await loadDriverTasks();
+  setStatus("Command confirmed", "ok");
+};
+
+const submitDriverReport = async (event) => {
+  event.preventDefault();
+  const task = selectedDriverTask();
+  if (!task) {
+    return;
+  }
+  setStatus("Submitting driver report", "loading");
+  const attachmentUrl = $("driver-attachment-url").value.trim();
+  const payload = {
+    reportStatus: $("driver-report-status").value,
+    note: $("driver-report-note").value,
+    attachmentUrls: attachmentUrl ? [attachmentUrl] : [],
+  };
+  await requestJson(`/api/driver/tasks/${encodeURIComponent(task.taskId)}/status-reports`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    authHeaders: driverAuthHeaders,
+  });
+  $("driver-attachment-url").value = "";
+  await loadDriverTasks();
+  setStatus("Driver report submitted", "ok");
+};
+
+const updateRoleTabVisibility = () => {
+  if (!navigation) {
+    return;
+  }
+  const visibleEntries = navigation.visibleEntriesForRole(state.role) || [];
+  const visibleViews = new Set(visibleEntries.map((entry) => entry.view || entry.id));
+  document.querySelectorAll(".mode-tab").forEach((button) => {
+    const view = button.dataset.view;
+    button.style.display = visibleViews.has(view) ? "" : "none";
+  });
+  if (!visibleViews.has(state.activeView) && visibleEntries.length > 0) {
+    switchView(visibleEntries[0].view || visibleEntries[0].id || "dispatch");
+  }
+};
+
 const wireEvents = () => {
   document.querySelectorAll(".mode-tab").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
   });
+  $("role-select").addEventListener("change", (event) => {
+    state.role = event.target.value;
+    window.localStorage.setItem("cargoflowRole", state.role);
+    updateRoleTabVisibility();
+    switchView(navigation?.defaultEntryForRole(state.role)?.view || "dispatch");
+  });
+  $("refresh-distribution").addEventListener("click", () => loadDistribution().catch(handleError));
   $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
   $("refresh-warehouse").addEventListener("click", () => loadWarehouse().catch(handleError));
   $("refresh-logs").addEventListener("click", () => loadLogs().catch(handleError));
   $("refresh-shipper").addEventListener("click", () => loadShipperDetail().catch(handleError));
+  $("refresh-driver").addEventListener("click", () => loadDriverTasks().catch(handleError));
   $("show-trajectory").addEventListener("click", () => {
     $("shipper-trajectory-section").scrollIntoView({ block: "start", behavior: "smooth" });
   });
@@ -1036,21 +1507,38 @@ const wireEvents = () => {
       renderVehicleList();
     });
   });
+  $("open-vehicle-alert").addEventListener("click", () =>
+    openSelectedVehicleAlert().catch(handleError),
+  );
   $("command-form").addEventListener("submit", (event) =>
     createCommand(event).catch(handleError),
   );
   $("close-form").addEventListener("submit", (event) =>
     closeAlert(event).catch(handleError),
   );
-  document.querySelectorAll(".filter-button").forEach((button) => {
+  $("driver-report-form").addEventListener("submit", (event) =>
+    submitDriverReport(event).catch(handleError),
+  );
+  document.querySelectorAll(".alert-filter-button").forEach((button) => {
     button.addEventListener("click", () => {
       document
-        .querySelectorAll(".filter-button")
+        .querySelectorAll(".alert-filter-button")
         .forEach((item) => item.classList.remove("is-active"));
       button.classList.add("is-active");
       state.statusFilter = button.dataset.status || "";
       state.selectedAlertId = null;
       loadAlerts().catch(handleError);
+    });
+  });
+  document.querySelectorAll(".distribution-filter-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      document
+        .querySelectorAll(".distribution-filter-button")
+        .forEach((item) => item.classList.remove("is-active"));
+      button.classList.add("is-active");
+      state.distribution.statusFilter = button.dataset.distributionStatus || "";
+      state.distribution.selectedVehicleId = null;
+      loadDistribution().catch(handleError);
     });
   });
 };
@@ -1063,8 +1551,33 @@ const switchView = (view) => {
   document.querySelectorAll(".view-panel").forEach((panel) => {
     panel.classList.toggle("is-active", panel.id === `${state.activeView}-view`);
   });
+  if (state.activeView === "dispatch" && state.distribution.vehicles.length === 0) {
+    loadDistribution().catch(handleError);
+  } else if (state.activeView === "dispatch") {
+    setStatus(
+      `${state.distribution.vehicles.length} mapped vehicle${state.distribution.vehicles.length === 1 ? "" : "s"}`,
+      "ok",
+    );
+  }
+  if (
+    state.activeView === "alert-handling" &&
+    state.alerts.length === 0 &&
+    !state.selectedAlertId
+  ) {
+    loadAlerts().catch(handleError);
+  } else if (state.activeView === "alert-handling") {
+    setStatus(`${state.alerts.length} scoped alert${state.alerts.length === 1 ? "" : "s"}`, "ok");
+  }
   if (state.activeView === "admin-logs" && state.logs.length === 0) {
     loadLogs().catch(handleError);
+  }
+  if (state.activeView === "driver" && state.driver.tasks.length === 0) {
+    loadDriverTasks().catch(handleError);
+  } else if (state.activeView === "driver") {
+    setStatus(
+      `${state.driver.tasks.length} driver task${state.driver.tasks.length === 1 ? "" : "s"}`,
+      "ok",
+    );
   }
   if (state.activeView === "warehouse" && state.vehicles.length === 0) {
     loadWarehouse().catch(handleError);
@@ -1085,5 +1598,23 @@ const handleError = (error) => {
   }
 };
 
+const populateRoleSelect = () => {
+  const select = $("role-select");
+  if (!navigation?.roleOrder) {
+    return;
+  }
+  navigation.roleOrder.forEach((role) => {
+    const profile = navigation.roleProfiles[role];
+    const option = document.createElement("option");
+    option.value = role;
+    option.textContent = profile?.label || role;
+    option.selected = role === state.role;
+    select.append(option);
+  });
+};
+
+$("role-select").value = initialRole;
+populateRoleSelect();
+updateRoleTabVisibility();
 wireEvents();
-loadAlerts().catch(handleError);
+loadDistribution().catch(handleError);

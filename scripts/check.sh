@@ -34,6 +34,8 @@ require_path "apps/api/cargoflow_api/server.py"
 require_path "apps/api/tests/test_server.py"
 require_path "apps/web/index.html"
 require_path "apps/web/app.js"
+require_path "apps/web/navigation-rules.js"
+require_path "apps/web/tests/navigation-rules.test.js"
 require_path "apps/web/styles.css"
 
 log "checking script syntax"
@@ -195,13 +197,20 @@ if ! python3 - <<'PY'
 from pathlib import Path
 
 index = Path("apps/web/index.html").read_text(encoding="utf-8")
-for asset in ("./styles.css", "./app.js"):
+for asset in ("./styles.css", "./navigation-rules.js", "./app.js"):
     if asset not in index:
         raise SystemExit(f"apps/web/index.html does not reference {asset}")
+if index.index("./navigation-rules.js") > index.index("./app.js"):
+    raise SystemExit("navigation-rules.js must load before app.js")
 PY
 then
   fail "frontend asset wiring failed"
 fi
+
+log "checking frontend navigation rules"
+node --check apps/web/navigation-rules.js || fail "navigation rules syntax failed"
+node --check apps/web/app.js || fail "frontend app syntax failed"
+node apps/web/tests/navigation-rules.test.js || fail "frontend navigation tests failed"
 
 log "checking accidental secret patterns"
 secret_terms=(

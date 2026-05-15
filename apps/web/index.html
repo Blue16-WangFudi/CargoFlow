@@ -15,11 +15,17 @@
           <h1 id="page-title">Operations Console</h1>
         </div>
         <nav class="mode-tabs" aria-label="Workspace views">
-          <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch</button>
+          <button class="mode-tab is-active" type="button" data-view="dispatch">Dispatch Map</button>
+          <button class="mode-tab" type="button" data-view="alert-handling">Alert Handling</button>
           <button class="mode-tab" type="button" data-view="warehouse">Warehouse</button>
+          <button class="mode-tab" type="button" data-view="driver">Driver Workspace</button>
           <button class="mode-tab" type="button" data-view="admin-logs">Admin Logs</button>
           <button class="mode-tab" type="button" data-view="shipper">Shipper Detail</button>
         </nav>
+        <label class="role-picker">
+          <span>Role</span>
+          <select id="role-select" name="role"></select>
+        </label>
         <div class="service-status" id="service-status" data-state="loading">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="status-label">Checking API</span>
@@ -149,7 +155,194 @@
         </section>
       </section>
 
-      <section class="workspace view-panel is-active" id="dispatch-view" aria-label="Dispatch alert workspace">
+      <section class="driver-workspace view-panel" id="driver-view" aria-label="Driver task and status reporting">
+        <aside class="queue-panel" aria-labelledby="driver-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Driver</p>
+              <h2 id="driver-title">My Tasks</h2>
+            </div>
+            <button class="icon-button" id="refresh-driver" type="button" title="Refresh driver tasks" aria-label="Refresh driver tasks">
+              &#8635;
+            </button>
+          </div>
+          <div class="alert-summary task-summary" id="driver-task-summary">Waiting for tasks</div>
+          <div class="driver-task-list" id="driver-task-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="driver-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Assigned Transport</p>
+              <h2 id="driver-detail-title">Task Detail & Reporting</h2>
+            </div>
+            <span class="badge" id="driver-task-status">-</span>
+          </div>
+
+          <div class="metric-grid driver-metrics">
+            <article class="metric-card">
+              <span>Task</span>
+              <strong id="driver-task-number">-</strong>
+              <small id="driver-shipment-id">-</small>
+            </article>
+            <article class="metric-card">
+              <span>Cargo</span>
+              <strong id="driver-cargo-name">-</strong>
+              <small id="driver-vehicle-label">-</small>
+            </article>
+            <article class="metric-card">
+              <span>Planned Arrival</span>
+              <strong id="driver-planned-arrival">-</strong>
+              <small id="driver-route-label">-</small>
+            </article>
+          </div>
+
+          <div class="driver-detail-grid">
+            <section class="info-panel" aria-labelledby="driver-command-title">
+              <div class="section-header compact">
+                <h3 id="driver-command-title">Dispatch Commands</h3>
+                <span id="driver-command-count" class="hint">0 commands</span>
+              </div>
+              <div class="driver-command-list" id="driver-command-list"></div>
+            </section>
+
+            <form class="info-panel form-panel" id="driver-report-form">
+              <div class="section-header compact">
+                <h3>Status Report</h3>
+                <span class="hint">Forward only</span>
+              </div>
+              <label>
+                Status
+                <select id="driver-report-status" name="reportStatus">
+                  <option value="loaded">Loaded</option>
+                  <option value="in_transit">In Transit</option>
+                  <option value="delivered">Delivered</option>
+                </select>
+              </label>
+              <label>
+                Note
+                <textarea id="driver-report-note" name="note" rows="4">Cargo condition normal.</textarea>
+              </label>
+              <label>
+                Attachment URL
+                <input id="driver-attachment-url" name="attachmentUrl" type="url" autocomplete="off" placeholder="https://example.com/proof.jpg" />
+              </label>
+              <button class="primary-button" id="submit-driver-report" type="submit">Submit Report</button>
+            </form>
+          </div>
+
+          <section class="info-panel driver-history-panel" aria-labelledby="driver-history-title">
+            <div class="section-header compact">
+              <h3 id="driver-history-title">Report History</h3>
+              <span id="driver-report-count" class="hint">0 reports</span>
+            </div>
+            <div class="driver-report-list" id="driver-report-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section class="dispatch-map-workspace view-panel is-active" id="dispatch-view" aria-label="Dispatch vehicle distribution">
+        <aside class="queue-panel" aria-labelledby="distribution-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Dispatcher</p>
+              <h2 id="distribution-title">Vehicle Distribution</h2>
+            </div>
+            <button class="icon-button" id="refresh-distribution" type="button" title="Refresh vehicles" aria-label="Refresh vehicles">
+              &#8635;
+            </button>
+          </div>
+
+          <div class="filter-row distribution-filters" role="group" aria-label="Vehicle distribution filter">
+            <button class="distribution-filter-button is-active" type="button" data-distribution-status="">All</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="online">Online</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="in_transit">In Transit</button>
+            <button class="distribution-filter-button" type="button" data-distribution-status="alert">Alerts</button>
+          </div>
+
+          <div class="distribution-summary" aria-label="Vehicle distribution summary">
+            <article>
+              <span>Total</span>
+              <strong id="distribution-total">0</strong>
+            </article>
+            <article>
+              <span>Online</span>
+              <strong id="distribution-online">0</strong>
+            </article>
+            <article>
+              <span>Moving</span>
+              <strong id="distribution-in-transit">0</strong>
+            </article>
+            <article>
+              <span>Alerts</span>
+              <strong id="distribution-alerting">0</strong>
+            </article>
+          </div>
+
+          <div class="vehicle-list" id="vehicle-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="distribution-detail-title">
+          <div class="section-header detail-header">
+            <div>
+              <p class="eyebrow">Live Map</p>
+              <h2 id="distribution-detail-title">Regional Vehicle Map</h2>
+            </div>
+            <div class="alert-summary" id="distribution-summary-label">Waiting for vehicles</div>
+          </div>
+
+          <div class="distribution-layout">
+            <article class="info-panel map-panel" aria-labelledby="map-title">
+              <div class="section-header compact">
+                <h3 id="map-title">East China Dispatch Region</h3>
+                <span class="hint" id="map-count">0 vehicles</span>
+              </div>
+              <div class="vehicle-map" id="vehicle-map" aria-label="Vehicle location map"></div>
+              <div class="map-legend" aria-label="Map legend">
+                <span><i class="legend-dot online"></i>Online</span>
+                <span><i class="legend-dot delayed"></i>Delayed</span>
+                <span><i class="legend-dot alert"></i>Active alert</span>
+              </div>
+            </article>
+
+            <article class="info-panel vehicle-detail-card" aria-labelledby="vehicle-detail-title">
+              <div class="section-header compact">
+                <h3 id="vehicle-detail-title">Selected Vehicle</h3>
+                <span class="badge" id="selected-vehicle-state">-</span>
+              </div>
+              <dl class="info-list compact-list">
+                <div>
+                  <dt>Vehicle</dt>
+                  <dd id="selected-vehicle-number">-</dd>
+                </div>
+                <div>
+                  <dt>Plate</dt>
+                  <dd id="selected-vehicle-plate">-</dd>
+                </div>
+                <div>
+                  <dt>Cargo</dt>
+                  <dd id="selected-vehicle-cargo">-</dd>
+                </div>
+                <div>
+                  <dt>Driver</dt>
+                  <dd id="selected-vehicle-driver">-</dd>
+                </div>
+                <div>
+                  <dt>Location</dt>
+                  <dd id="selected-vehicle-location">-</dd>
+                </div>
+                <div>
+                  <dt>Updated</dt>
+                  <dd id="selected-vehicle-updated">-</dd>
+                </div>
+              </dl>
+              <button class="primary-button vehicle-alert-action" id="open-vehicle-alert" type="button">Open Alert Detail</button>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section class="workspace view-panel" id="alert-handling-view" aria-label="Dispatch alert workspace">
         <aside class="queue-panel" aria-labelledby="queue-title">
           <div class="section-header">
             <div>
@@ -161,9 +354,9 @@
             </button>
           </div>
           <div class="filter-row" role="group" aria-label="Alert status filter">
-            <button class="filter-button is-active" type="button" data-status="">All</button>
-            <button class="filter-button" type="button" data-status="pending">Pending</button>
-            <button class="filter-button" type="button" data-status="processing">Processing</button>
+            <button class="alert-filter-button is-active" type="button" data-status="">All</button>
+            <button class="alert-filter-button" type="button" data-status="pending">Pending</button>
+            <button class="alert-filter-button" type="button" data-status="processing">Processing</button>
           </div>
           <div class="alert-list" id="alert-list" aria-live="polite"></div>
         </aside>
