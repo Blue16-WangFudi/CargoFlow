@@ -509,6 +509,18 @@ class CargoFlowHandler(BaseHTTPRequestHandler):
                 if isinstance(payload.get("reason"), str)
                 else None
             )
+            if CARGO_BINDINGS.vehicle_has_active_task(vehicle_id):
+                self.send_json(
+                    HTTPStatus.CONFLICT,
+                    {
+                        "error": "vehicle_has_active_task",
+                        "message": (
+                            "Cannot unbind a vehicle with an active transport task. "
+                            "Complete or reassign the task first."
+                        ),
+                    },
+                )
+                return
             vehicle = VEHICLES.unbind_vehicle(vehicle_id, principal, reason=reason)
         except AccessControlError as exc:
             self.send_access_error(exc)

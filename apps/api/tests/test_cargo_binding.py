@@ -211,6 +211,83 @@ class CargoBindingStoreTests(unittest.TestCase):
                 shipment_tracking=self.tracking,
             )
 
+    def test_vehicle_has_active_task_after_binding(self) -> None:
+        self.assertFalse(
+            self.bindings.vehicle_has_active_task("vehicle-available-001")
+        )
+
+        self.bindings.bind_cargo_to_vehicle(
+            {
+                "cargoId": "cargo-pending-001",
+                "vehicleId": "vehicle-available-001",
+            },
+            WAREHOUSE_ADMIN,
+            vehicles=self.vehicles,
+            device_events=self.device_events,
+            shipment_tracking=self.tracking,
+        )
+
+        self.assertTrue(
+            self.bindings.vehicle_has_active_task("vehicle-available-001")
+        )
+
+    def test_vehicle_has_active_task_after_rebind_frees_old_vehicle(self) -> None:
+        self.bindings.bind_cargo_to_vehicle(
+            {
+                "cargoId": "cargo-pending-001",
+                "vehicleId": "vehicle-available-001",
+            },
+            WAREHOUSE_ADMIN,
+            vehicles=self.vehicles,
+            device_events=self.device_events,
+            shipment_tracking=self.tracking,
+        )
+
+        self.bindings.bind_cargo_to_vehicle(
+            {
+                "cargoId": "cargo-pending-001",
+                "vehicleId": "vehicle-available-002",
+            },
+            WAREHOUSE_ADMIN,
+            vehicles=self.vehicles,
+            device_events=self.device_events,
+            shipment_tracking=self.tracking,
+        )
+
+        self.assertFalse(
+            self.bindings.vehicle_has_active_task("vehicle-available-001")
+        )
+        self.assertTrue(
+            self.bindings.vehicle_has_active_task("vehicle-available-002")
+        )
+
+    def test_binding_conflict_error_includes_clear_message(self) -> None:
+        self.bindings.bind_cargo_to_vehicle(
+            {
+                "cargoId": "cargo-pending-001",
+                "vehicleId": "vehicle-available-001",
+            },
+            WAREHOUSE_ADMIN,
+            vehicles=self.vehicles,
+            device_events=self.device_events,
+            shipment_tracking=self.tracking,
+        )
+
+        with self.assertRaises(CargoBindingConflictError) as ctx:
+            self.bindings.bind_cargo_to_vehicle(
+                {
+                    "cargoId": "cargo-demo-001",
+                    "vehicleId": "vehicle-available-001",
+                },
+                WAREHOUSE_ADMIN,
+                vehicles=self.vehicles,
+                device_events=self.device_events,
+                shipment_tracking=self.tracking,
+            )
+
+        self.assertEqual(ctx.exception.error_code, "cargo_binding_conflict")
+        self.assertIn("already bound", ctx.exception.message)
+
     def test_warehouse_admin_must_match_cargo_scope(self) -> None:
         out_of_scope = Principal(
             "warehouse-admin-2",

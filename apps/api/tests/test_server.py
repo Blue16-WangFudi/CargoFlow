@@ -1046,7 +1046,7 @@ class HttpRouteTests(unittest.TestCase):
         self.assertEqual(updated["vehicle"]["plateNumber"], "SH-C54321")
 
         unbind_request = Request(
-            f"{self.base_url}/api/vehicles/vehicle-demo-001/unbind",
+            f"{self.base_url}/api/vehicles/vehicle-http-001/unbind",
             data=json.dumps({"reason": "completed"}).encode("utf-8"),
             headers={
                 **WAREHOUSE_AUTH_HEADERS,
@@ -1174,6 +1174,26 @@ class HttpRouteTests(unittest.TestCase):
         payload = json.loads(error.read().decode("utf-8"))
         self.assertEqual(error.code, 403)
         self.assertEqual(payload["error"], "vehicle_access_denied")
+
+    def test_vehicle_routes_reject_unbind_with_active_task(self) -> None:
+        unbind_request = Request(
+            f"{self.base_url}/api/vehicles/vehicle-demo-001/unbind",
+            data=json.dumps({"reason": "attempt during active task"}).encode("utf-8"),
+            headers={
+                **WAREHOUSE_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(unbind_request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 409)
+        self.assertEqual(payload["error"], "vehicle_has_active_task")
+        self.assertIn("active transport task", payload["message"])
 
     def test_cargo_binding_route_creates_task_and_tracking_link(self) -> None:
         create_vehicle_request = Request(
