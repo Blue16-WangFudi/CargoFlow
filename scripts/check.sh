@@ -22,7 +22,7 @@ require_path() {
   fi
 }
 
-log "checking required architecture docs"
+log "checking required product paths"
 require_path "README.md"
 require_path "DESIGN.md"
 require_path "docs/exec-plans/2026-05-13-tech-architecture-constraints.md"
@@ -32,6 +32,7 @@ require_path ".github/workflows/check.yml"
 require_path "infra/compose/dev.yml"
 require_path "apps/api/cargoflow_api/server.py"
 require_path "apps/api/tests/test_server.py"
+require_path "apps/web/tests/test_console_contract.py"
 require_path "apps/web/index.html"
 require_path "apps/web/app.js"
 require_path "apps/web/navigation-rules.js"
@@ -39,15 +40,34 @@ require_path "apps/web/tests/navigation-rules.test.js"
 require_path "apps/web/styles.css"
 
 log "checking script syntax"
-bash -n scripts/check.sh || fail "shell syntax failed: scripts/check.sh"
-bash -n scripts/start.sh || fail "shell syntax failed: scripts/start.sh"
+for script in scripts/*.sh; do
+  bash -n "$script" || fail "shell syntax failed: $script"
+done
 
 log "checking script executability"
-if [[ ! -x "scripts/check.sh" ]]; then
-  fail "script is not executable: scripts/check.sh"
-fi
-if [[ ! -x "scripts/start.sh" ]]; then
-  fail "script is not executable: scripts/start.sh"
+for script in scripts/check.sh scripts/start.sh; do
+  if [[ ! -x "$script" ]]; then
+    fail "script is not executable: $script"
+  fi
+done
+
+log "checking CI workflow contract"
+if ! python3 - <<'PY'
+from pathlib import Path
+
+workflow = Path(".github/workflows/check.yml").read_text(encoding="utf-8")
+required_terms = [
+    "actions/checkout",
+    "actions/setup-python",
+    "actions/setup-node",
+    "scripts/check.sh",
+]
+missing = [term for term in required_terms if term not in workflow]
+if missing:
+    raise SystemExit(f"CI workflow is missing: {', '.join(missing)}")
+PY
+then
+  fail "CI workflow contract failed"
 fi
 
 log "checking architecture decision coverage"
@@ -63,17 +83,6 @@ for term in \
     fail "missing architecture term: $term"
   fi
 done
-
-log "checking conflict markers"
-if command -v rg >/dev/null 2>&1; then
-  if rg -n '^(<<<<<<<|=======|>>>>>>>)($| )' .; then
-    fail "conflict markers found"
-  fi
-else
-  if grep -RInE '^(<<<<<<<|=======|>>>>>>>)($| )' --exclude-dir=.git .; then
-    fail "conflict markers found"
-  fi
-fi
 
 log "checking Markdown links"
 if ! python3 - <<'PY'
@@ -118,12 +127,14 @@ then
   fail "Markdown link check failed"
 fi
 
-log "checking API skeleton"
+log "checking backend syntax"
 export PYTHONPATH="$ROOT_DIR/apps/api${PYTHONPATH:+:$PYTHONPATH}"
 python3 -m compileall -q apps/api || fail "python compile failed"
-python3 -m unittest discover -s apps/api/tests -p 'test_*.py' || fail "python tests failed"
 
-log "checking HTTP smoke path"
+log "running backend unit and HTTP tests"
+python3 -m unittest discover -s apps/api/tests -p 'test_*.py' -v || fail "python tests failed"
+
+log "running backend smoke check"
 if ! python3 - <<'PY'
 import json
 from urllib.request import urlopen
@@ -192,19 +203,25 @@ then
   fail "HTTP smoke path failed"
 fi
 
-log "checking frontend asset wiring"
-if ! python3 - <<'PY'
-from pathlib import Path
+log "running frontend contract tests"
+python3 -m unittest discover -s apps/web/tests -p 'test_*.py' -v || fail "frontend contract tests failed"
 
-index = Path("apps/web/index.html").read_text(encoding="utf-8")
-for asset in ("./styles.css", "./navigation-rules.js", "./app.js"):
-    if asset not in index:
-        raise SystemExit(f"apps/web/index.html does not reference {asset}")
-if index.index("./navigation-rules.js") > index.index("./app.js"):
-    raise SystemExit("navigation-rules.js must load before app.js")
-PY
-then
-  fail "frontend asset wiring failed"
+if command -v node >/dev/null 2>&1; then
+  log "checking frontend JavaScript syntax"
+  node --check apps/web/app.js || fail "frontend JavaScript syntax failed"
+else
+  log "skipping frontend JavaScript syntax check because node is not installed"
+fi
+
+log "checking conflict markers"
+if command -v rg >/dev/null 2>&1; then
+  if rg -n '^(<<<<<<<|=======|>>>>>>>)($| )' .; then
+    fail "conflict markers found"
+  fi
+else
+  if grep -RInE '^(<<<<<<<|=======|>>>>>>>)($| )' --exclude-dir=.git .; then
+    fail "conflict markers found"
+  fi
 fi
 
 log "checking frontend navigation rules"

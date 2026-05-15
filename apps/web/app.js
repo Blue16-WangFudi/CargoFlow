@@ -1005,7 +1005,7 @@ const renderShipperAlerts = (alertPoints) => {
 
 const renderWarehouse = () => {
   renderWarehouseSummary();
-  renderVehicleList();
+  renderWarehouseVehicleList();
   renderVehicleDetail();
   renderAvailableVehicleSelect();
 };
@@ -1033,7 +1033,7 @@ const filteredVehicles = () => {
 const selectedVehicle = () =>
   state.vehicles.find((vehicle) => vehicle.vehicleId === state.selectedVehicleId) || null;
 
-const renderVehicleList = () => {
+const renderWarehouseVehicleList = () => {
   const list = $("warehouse-vehicle-list");
   list.replaceChildren();
   const vehicles = filteredVehicles();
@@ -1504,7 +1504,7 @@ const wireEvents = () => {
         .forEach((item) => item.classList.remove("is-active"));
       button.classList.add("is-active");
       state.vehicleFilter = button.dataset.filter || "all";
-      renderVehicleList();
+      renderWarehouseVehicleList();
     });
   });
   $("open-vehicle-alert").addEventListener("click", () =>
