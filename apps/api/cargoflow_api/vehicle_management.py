@@ -46,6 +46,15 @@ class VehicleConflictError(VehicleManagementError):
         )
 
 
+class VehicleScopeError(VehicleManagementError):
+    def __init__(self) -> None:
+        super().__init__(
+            "vehicle_scope_denied",
+            "Warehouse admins can only manage vehicles in their warehouse scope.",
+            HTTPStatus.FORBIDDEN,
+        )
+
+
 class VehicleStore:
     """In-memory vehicle repository until CargoFlow's database layer is wired."""
 
@@ -59,6 +68,7 @@ class VehicleStore:
             (
                 Vehicle(
                     id="vehicle-demo-001",
+                    warehouse_id="warehouse-shanghai",
                     vehicle_number="VH-DEMO-001",
                     plate_number="CF-2026",
                     device_id="gps-demo-001",
@@ -75,17 +85,24 @@ class VehicleStore:
         require_vehicle_manager(principal)
         with self._lock:
             return sorted(
-                self._vehicles.values(),
+                (
+                    vehicle
+                    for vehicle in self._vehicles.values()
+                    if principal_can_manage_vehicle(principal, vehicle)
+                ),
                 key=lambda vehicle: vehicle.vehicle_number,
             )
 
     def get_vehicle(self, vehicle_id: str, principal: Principal) -> Vehicle:
         require_vehicle_manager(principal)
-        return self._vehicle_for(vehicle_id)
+        vehicle = self._vehicle_for(vehicle_id)
+        require_vehicle_scope(principal, vehicle)
+        return vehicle
 
     def create_vehicle(self, payload: Mapping[str, Any], principal: Principal) -> Vehicle:
         require_vehicle_manager(principal)
-        vehicle = vehicle_from_payload(payload)
+        vehicle = vehicle_from_payload(payload, principal=principal)
+        require_vehicle_scope(principal, vehicle)
         with self._lock:
             if vehicle.id in self._vehicles:
                 raise VehicleConflictError("vehicleId")
@@ -105,8 +122,11 @@ class VehicleStore:
 
         with self._lock:
             current = self._vehicle_for_locked(vehicle_id)
+            require_vehicle_scope(principal, current)
             updated = replace(
                 current,
+                warehouse_id=_optional_text(payload, "warehouseId")
+                or current.warehouse_id,
                 vehicle_number=_optional_text(payload, "vehicleNumber")
                 or current.vehicle_number,
                 plate_number=_optional_text(payload, "plateNumber")
@@ -122,6 +142,7 @@ class VehicleStore:
                 else current.notes,
                 updated_at=utc_now(),
             )
+            require_vehicle_scope(principal, updated)
             self._ensure_unique(updated, current_vehicle_id=vehicle_id)
             self._vehicles[vehicle_id] = updated
             return updated
@@ -136,11 +157,36 @@ class VehicleStore:
         require_vehicle_manager(principal)
         with self._lock:
             current = self._vehicle_for_locked(vehicle_id)
+            require_vehicle_scope(principal, current)
             updated = replace(
                 current,
                 binding_status=VehicleBindingStatus.DISABLED,
                 online_status=VehicleOnlineStatus.OFFLINE,
                 notes=_merge_reason(current.notes, reason),
+                updated_at=utc_now(),
+            )
+            self._vehicles[vehicle_id] = updated
+            return updated
+
+    def bind_vehicle(
+        self,
+        vehicle_id: str,
+        principal: Principal,
+        *,
+        driver_user_id: str,
+    ) -> Vehicle:
+        require_vehicle_manager(principal)
+        if not driver_user_id.strip():
+            raise VehicleValidationError("driverUserId must be a non-empty string.")
+        with self._lock:
+            current = self._vehicle_for_locked(vehicle_id)
+            require_vehicle_scope(principal, current)
+            if current.binding_status is VehicleBindingStatus.DISABLED:
+                raise VehicleValidationError("Disabled vehicles cannot be bound.")
+            updated = replace(
+                current,
+                binding_status=VehicleBindingStatus.BOUND,
+                driver_user_id=driver_user_id.strip(),
                 updated_at=utc_now(),
             )
             self._vehicles[vehicle_id] = updated
@@ -156,6 +202,7 @@ class VehicleStore:
         require_vehicle_manager(principal)
         with self._lock:
             current = self._vehicle_for_locked(vehicle_id)
+            require_vehicle_scope(principal, current)
             if current.binding_status is VehicleBindingStatus.DISABLED:
                 raise VehicleValidationError("Disabled vehicles cannot be unbound.")
             updated = replace(
@@ -204,13 +251,48 @@ def require_vehicle_manager(principal: Principal) -> None:
         raise VehicleAuthorizationError()
 
 
-def vehicle_from_payload(payload: Mapping[str, Any]) -> Vehicle:
+def principal_can_manage_vehicle(principal: Principal, vehicle: Vehicle) -> bool:
+    if principal.role is Role.SYSTEM_ADMIN:
+        return True
+    if principal.role is Role.WAREHOUSE_ADMIN:
+        return vehicle.warehouse_id in principal.warehouse_ids
+    return False
+
+
+def require_vehicle_scope(principal: Principal, vehicle: Vehicle) -> None:
+    if not principal_can_manage_vehicle(principal, vehicle):
+        raise VehicleScopeError()
+
+
+def _warehouse_id_from_payload(
+    payload: Mapping[str, Any],
+    principal: Principal | None,
+) -> str:
+    warehouse_id = _optional_text(payload, "warehouseId")
+    if warehouse_id is not None:
+        return warehouse_id
+    if principal is not None and principal.role is Role.WAREHOUSE_ADMIN:
+        if len(principal.warehouse_ids) == 1:
+            return principal.warehouse_ids[0]
+        raise VehicleValidationError(
+            "warehouseId is required when a warehouse admin has multiple scopes."
+        )
+    raise VehicleValidationError("Missing required field: warehouseId.")
+
+
+def vehicle_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    principal: Principal | None = None,
+) -> Vehicle:
+    warehouse_id = _warehouse_id_from_payload(payload, principal)
     vehicle_number = _required_text(payload, "vehicleNumber")
     plate_number = _required_text(payload, "plateNumber")
     device_id = _required_text(payload, "deviceId")
     now = utc_now()
     return Vehicle(
         id=_optional_text(payload, "vehicleId") or f"vehicle-{uuid4().hex}",
+        warehouse_id=warehouse_id,
         vehicle_number=vehicle_number,
         plate_number=plate_number,
         device_id=device_id,
@@ -226,6 +308,7 @@ def vehicle_from_payload(payload: Mapping[str, Any]) -> Vehicle:
 def vehicle_to_wire(vehicle: Vehicle) -> dict[str, Any]:
     return {
         "vehicleId": vehicle.id,
+        "warehouseId": vehicle.warehouse_id,
         "vehicleNumber": vehicle.vehicle_number,
         "plateNumber": vehicle.plate_number,
         "deviceId": vehicle.device_id,

@@ -52,6 +52,9 @@ Default URLs:
 - Demo latest location API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/latest-location
 - Demo ETA API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/eta
 - Demo trajectory replay API: http://127.0.0.1:8000/api/shipments/CGF-DEMO-001/trajectory
+- Demo dispatcher vehicle distribution API: http://127.0.0.1:8000/api/dispatch/vehicle-distribution
+- Demo Q&A ask API: http://127.0.0.1:8000/api/qa/ask
+- Demo driver tasks API: http://127.0.0.1:8000/api/driver/tasks
 - Frontend console: http://127.0.0.1:5173
 
 Ports can be changed with environment variables:
@@ -105,12 +108,20 @@ startup and check commands.
   the driver role for the bound task, only move the transport status forward,
   and preserve reporter, reported time, note, and attachment URLs for trajectory
   replay.
+- `POST /api/shipments/{shipmentId}/sign` lets the cargo owner sign for a
+  shipment after the driver reports it delivered, moving the current
+  development tracking status to `signed`.
 - `GET /api/vehicles`, `GET /api/vehicles/{vehicleId}`,
   `POST /api/vehicles`, `PATCH /api/vehicles/{vehicleId}`,
   `POST /api/vehicles/{vehicleId}/disable`, and
   `POST /api/vehicles/{vehicleId}/unbind` provide the current development
   vehicle management contract. Warehouse admins and system admins can maintain
-  vehicles; vehicle number, plate number, and device ID uniqueness is enforced.
+  vehicles; warehouse admins are scoped by `X-CargoFlow-Warehouse-Ids`.
+  Vehicle number, plate number, and device ID uniqueness is enforced.
+- `POST /api/cargo-bindings` lets a scoped warehouse admin or system admin bind
+  cargo to an available vehicle. The binding creates or updates the active
+  transport task, marks the vehicle as bound, registers the device-task binding,
+  and makes later device locations visible through the shipment tracking APIs.
 - `POST /api/device-events` accepts the current development contract for
   device GPS, heartbeat, and box-open/box-close events. Payloads must include
   `eventId`, `eventType`, `deviceId`, `taskId`, `occurredAt`, `reportedAt`, and
@@ -118,9 +129,46 @@ startup and check commands.
   capture time, and the active device-task binding are valid. Accepted GPS and
   box-open events can return `generatedAlerts` when the current alert rules
   create or merge route-deviation, abnormal-stop, or box-open alerts.
+- `GET /api/alerts`, `GET /api/alerts/{alertId}`,
+  `POST /api/alerts/{alertId}/process`,
+  `POST /api/alerts/{alertId}/dispatch-commands`,
+  `POST /api/alerts/{alertId}/close`, and
+  `POST /api/alerts/{alertId}/false-positive` provide the current development
+  alert handling contract. Scoped dispatchers and system admins can inspect alert
+  detail with notification and command chains, move open alerts into processing,
+  create dispatch commands, close them with a required reason, or mark them as
+  false positives; handler, close actor, timestamps, command status, and reason
+  are returned for audit.
+- `GET /api/alert-logs` and `GET /api/alert-logs/export` provide the current
+  system-admin alert log contract. The endpoints support `type`, `severity`,
+  `status`, `vehicleId`, `cargoId`, `triggeredFrom`, and `triggeredTo` filters
+  and return each alert's notification and dispatch-command chain.
+- `GET /api/dispatch/vehicle-distribution` provides the current dispatcher
+  vehicle map contract. Scoped dispatchers and system admins can read vehicle
+  points, online and transport states, bound cargo context, and active alert
+  summaries; the development endpoint supports `status=online`,
+  `status=in_transit`, and `status=alert` filters.
+- `POST /api/qa/ask`, `GET /api/qa/records`,
+  `GET /api/qa/records/{recordId}`, and
+  `POST /api/qa/records/{recordId}/feedback` provide the current intelligent
+  Q&A contract. The development service records every question, answer,
+  citation, session, authorization summary, and feedback value; answers are
+  deterministic until a model-backed retrieval layer is wired. Business-context
+  answers first pass through the role-scoped Q&A context filter, and unanswered
+  or unauthorized requests are recorded with a failure reason.
+- `GET /api/driver/tasks`,
+  `POST /api/driver/commands/{commandId}/acknowledge`, and
+  `POST /api/driver/tasks/{taskId}/status-reports` provide the current driver
+  workspace contract. Drivers can only read their own active transport tasks,
+  confirm commands targeted to them, and submit forward-only `loaded`,
+  `in_transit`, or `delivered` status reports with notes and optional
+  attachment URLs.
 - Future intelligent Q&A APIs must follow the knowledge source, citation,
   refusal, and privacy boundaries in
   [docs/knowledge/qa-knowledge-scope-and-citations.md](docs/knowledge/qa-knowledge-scope-and-citations.md).
+  The current backend includes an authorization-scoped business context filter
+  for Q&A retrieval; cargo, vehicle, transport task, and alert candidates must
+  pass that filter before they are sent to any retrieval or generation layer.
 
 ## Core Domain Contracts
 

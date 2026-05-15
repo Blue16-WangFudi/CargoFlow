@@ -155,6 +155,96 @@ class ShipmentTrackingStore:
     def scope_for(self, shipment_id: str) -> ShipmentScope:
         return self._record_for(shipment_id).scope
 
+    def upsert_record(
+        self,
+        record: ShipmentTrackingRecord,
+        *,
+        aliases: tuple[str, ...] = (),
+    ) -> None:
+        with self._lock:
+            self._records[record.shipment_id] = record
+            for alias in aliases:
+                if alias:
+                    self._aliases[alias] = record.shipment_id
+
+    def update_transport_status(
+        self,
+        shipment_id: str,
+        status: TransportTaskStatus,
+    ) -> ShipmentTrackingRecord:
+        with self._lock:
+            normalized = self._aliases.get(shipment_id, shipment_id)
+            try:
+                record = self._records[normalized]
+            except KeyError as exc:
+                raise ShipmentTrackingError(
+                    "shipment_not_found",
+                    f"No bound shipment found for {shipment_id}",
+                    HTTPStatus.NOT_FOUND,
+                ) from exc
+            updated = replace(record, transport_status=status)
+            self._records[normalized] = updated
+            return updated
+
+    def add_status_report(
+        self,
+        task_id: str,
+        report_status: StatusReportState,
+        reporter_user_id: str,
+        reported_at: datetime,
+        *,
+        report_id: str | None = None,
+        note: str | None = None,
+    ) -> ShipmentTrackingRecord | None:
+        with self._lock:
+            for shipment_id, record in self._records.items():
+                if record.task_id != task_id:
+                    continue
+                report = TrajectoryStatusReportPoint(
+                    report_id=report_id or f"tracking-report-{uuid4().hex}",
+                    report_status=report_status,
+                    reporter_user_id=reporter_user_id,
+                    reported_at=reported_at,
+                    note=note,
+                )
+                updated = replace(
+                    record,
+                    transport_status=_transport_status_for_report(report_status),
+                    status_reports=(*record.status_reports, report),
+                )
+                self._records[shipment_id] = updated
+                return updated
+        return None
+
+    def sign_for_delivery(
+        self,
+        shipment_id: str,
+        principal: Principal,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        record = self._record_for(shipment_id)
+        require_shipment_access(principal, record.scope)
+        if principal.user_id != record.owner_user_id:
+            raise ShipmentTrackingError(
+                "shipment_sign_access_denied",
+                "Only the cargo owner can sign for this shipment.",
+                HTTPStatus.FORBIDDEN,
+            )
+        if record.transport_status is TransportTaskStatus.SIGNED:
+            signed_at = _as_utc(now or datetime.now(UTC))
+            return _signed_payload(record, principal, signed_at)
+        if record.transport_status is not TransportTaskStatus.DELIVERED:
+            raise ShipmentTrackingError(
+                "shipment_not_delivered",
+                "Shipment can only be signed after the driver reports delivered.",
+                HTTPStatus.CONFLICT,
+            )
+
+        signed_at = _as_utc(now or datetime.now(UTC))
+        updated = self.update_transport_status(record.shipment_id, TransportTaskStatus.SIGNED)
+        return _signed_payload(updated, principal, signed_at)
+
     def latest_location_payload(
         self,
         shipment_id: str,
@@ -284,15 +374,16 @@ class ShipmentTrackingStore:
             return report, updated
 
     def _record_for(self, shipment_id: str) -> ShipmentTrackingRecord:
-        normalized = self._aliases.get(shipment_id, shipment_id)
-        try:
-            return self._records[normalized]
-        except KeyError as exc:
-            raise ShipmentTrackingError(
-                "shipment_not_found",
-                f"No bound shipment found for {shipment_id}",
-                HTTPStatus.NOT_FOUND,
-            ) from exc
+        with self._lock:
+            normalized = self._aliases.get(shipment_id, shipment_id)
+            try:
+                return self._records[normalized]
+            except KeyError as exc:
+                raise ShipmentTrackingError(
+                    "shipment_not_found",
+                    f"No bound shipment found for {shipment_id}",
+                    HTTPStatus.NOT_FOUND,
+                ) from exc
 
     def _delay_hint(
         self,
@@ -338,6 +429,27 @@ def _latest_location_to_wire(
         "capturedAt": latest.captured_at.isoformat(),
         "updatedAt": latest.reported_at.isoformat(),
         "eventId": latest.event_id,
+    }
+
+
+def _signed_payload(
+    record: ShipmentTrackingRecord,
+    principal: Principal,
+    signed_at: datetime,
+) -> dict[str, Any]:
+    return {
+        "shipment": {
+            "shipmentId": record.shipment_id,
+            "cargoId": record.cargo_id,
+            "taskId": record.task_id,
+            "transportStatus": record.transport_status.value,
+            "signedAt": signed_at.isoformat(),
+            "signedByUserId": principal.user_id,
+        },
+        "access": {
+            "role": principal.role.value,
+            "principalId": principal.user_id,
+        },
     }
 
 
@@ -494,3 +606,11 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).replace(microsecond=0)
+
+
+def _transport_status_for_report(report_status: StatusReportState) -> TransportTaskStatus:
+    return {
+        StatusReportState.LOADED: TransportTaskStatus.LOADED,
+        StatusReportState.IN_TRANSIT: TransportTaskStatus.IN_TRANSIT,
+        StatusReportState.DELIVERED: TransportTaskStatus.DELIVERED,
+    }[report_status]

@@ -7,6 +7,7 @@ from cargoflow_api.domain import Vehicle, VehicleBindingStatus, VehicleOnlineSta
 from cargoflow_api.vehicle_management import (
     VehicleAuthorizationError,
     VehicleConflictError,
+    VehicleScopeError,
     VehicleStore,
     VehicleValidationError,
     vehicle_from_payload,
@@ -27,6 +28,7 @@ class VehiclePayloadTests(unittest.TestCase):
         vehicle = vehicle_from_payload(
             {
                 "vehicleId": "vehicle-1",
+                "warehouseId": "warehouse-1",
                 "vehicleNumber": "VH-001",
                 "plateNumber": "SH-A12345",
                 "deviceId": "gps-001",
@@ -34,16 +36,37 @@ class VehiclePayloadTests(unittest.TestCase):
         )
 
         self.assertEqual(vehicle.id, "vehicle-1")
+        self.assertEqual(vehicle.warehouse_id, "warehouse-1")
         self.assertEqual(vehicle.online_status, VehicleOnlineStatus.OFFLINE)
         self.assertEqual(vehicle.binding_status, VehicleBindingStatus.AVAILABLE)
 
+    def test_vehicle_from_payload_defaults_warehouse_for_single_scope_admin(self) -> None:
+        vehicle = vehicle_from_payload(
+            {
+                "vehicleId": "vehicle-1",
+                "vehicleNumber": "VH-001",
+                "plateNumber": "SH-A12345",
+                "deviceId": "gps-001",
+            },
+            principal=WAREHOUSE_ADMIN,
+        )
+
+        self.assertEqual(vehicle.warehouse_id, "warehouse-1")
+
     def test_vehicle_from_payload_rejects_missing_unique_keys(self) -> None:
         with self.assertRaises(VehicleValidationError):
-            vehicle_from_payload({"vehicleNumber": "VH-001", "deviceId": "gps-001"})
+            vehicle_from_payload(
+                {
+                    "warehouseId": "warehouse-1",
+                    "vehicleNumber": "VH-001",
+                    "deviceId": "gps-001",
+                }
+            )
 
     def test_vehicle_to_wire_uses_api_field_names(self) -> None:
         vehicle = Vehicle(
             id="vehicle-1",
+            warehouse_id="warehouse-1",
             vehicle_number="VH-001",
             plate_number="SH-A12345",
             device_id="gps-001",
@@ -52,6 +75,7 @@ class VehiclePayloadTests(unittest.TestCase):
         payload = vehicle_to_wire(vehicle)
 
         self.assertEqual(payload["vehicleId"], "vehicle-1")
+        self.assertEqual(payload["warehouseId"], "warehouse-1")
         self.assertEqual(payload["vehicleNumber"], "VH-001")
         self.assertEqual(payload["bindingStatus"], "available")
 
@@ -62,6 +86,7 @@ class VehicleStoreTests(unittest.TestCase):
             (
                 Vehicle(
                     id="vehicle-1",
+                    warehouse_id="warehouse-1",
                     vehicle_number="VH-001",
                     plate_number="SH-A12345",
                     device_id="gps-001",
@@ -76,6 +101,7 @@ class VehicleStoreTests(unittest.TestCase):
         created = self.store.create_vehicle(
             {
                 "vehicleId": "vehicle-2",
+                "warehouseId": "warehouse-1",
                 "vehicleNumber": "VH-002",
                 "plateNumber": "SH-B12345",
                 "deviceId": "gps-002",
@@ -93,6 +119,7 @@ class VehicleStoreTests(unittest.TestCase):
             self.store.create_vehicle(
                 {
                     "vehicleId": "vehicle-2",
+                    "warehouseId": "warehouse-1",
                     "vehicleNumber": "VH-002",
                     "plateNumber": "SH-A12345",
                     "deviceId": "gps-002",
@@ -105,6 +132,7 @@ class VehicleStoreTests(unittest.TestCase):
             self.store.create_vehicle(
                 {
                     "vehicleId": "vehicle-1",
+                    "warehouseId": "warehouse-1",
                     "vehicleNumber": "VH-002",
                     "plateNumber": "SH-B12345",
                     "deviceId": "gps-002",
@@ -116,6 +144,7 @@ class VehicleStoreTests(unittest.TestCase):
         self.store.create_vehicle(
             {
                 "vehicleId": "vehicle-2",
+                "warehouseId": "warehouse-1",
                 "vehicleNumber": "VH-002",
                 "plateNumber": "SH-B12345",
                 "deviceId": "gps-002",
@@ -157,6 +186,41 @@ class VehicleStoreTests(unittest.TestCase):
 
         with self.assertRaises(VehicleAuthorizationError):
             self.store.list_vehicles(owner)
+
+    def test_warehouse_admin_only_lists_scoped_vehicles(self) -> None:
+        self.store.create_vehicle(
+            {
+                "vehicleId": "vehicle-2",
+                "warehouseId": "warehouse-2",
+                "vehicleNumber": "VH-002",
+                "plateNumber": "SH-B12345",
+                "deviceId": "gps-002",
+            },
+            Principal("system-admin-1", Role.SYSTEM_ADMIN, "tenant-1"),
+        )
+
+        vehicles = self.store.list_vehicles(WAREHOUSE_ADMIN)
+
+        self.assertEqual([vehicle.id for vehicle in vehicles], ["vehicle-1"])
+
+    def test_warehouse_admin_cannot_update_out_of_scope_vehicle(self) -> None:
+        self.store.create_vehicle(
+            {
+                "vehicleId": "vehicle-2",
+                "warehouseId": "warehouse-2",
+                "vehicleNumber": "VH-002",
+                "plateNumber": "SH-B12345",
+                "deviceId": "gps-002",
+            },
+            Principal("system-admin-1", Role.SYSTEM_ADMIN, "tenant-1"),
+        )
+
+        with self.assertRaises(VehicleScopeError):
+            self.store.update_vehicle(
+                "vehicle-2",
+                {"plateNumber": "SH-B54321"},
+                WAREHOUSE_ADMIN,
+            )
 
 
 if __name__ == "__main__":
