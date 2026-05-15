@@ -1,9 +1,21 @@
+const navigation = window.CargoFlowNavigation;
+const urlParams = new URLSearchParams(window.location.search);
 const apiBase =
-  new URLSearchParams(window.location.search).get("api") ||
+  urlParams.get("api") ||
   window.localStorage.getItem("cargoflowApiBase") ||
   "http://127.0.0.1:8000";
 
 window.localStorage.setItem("cargoflowApiBase", apiBase);
+
+const initialRole =
+  urlParams.get("role") ||
+  window.localStorage.getItem("cargoflowRole") ||
+  "dispatcher";
+
+const getAuthHeaders = (role) => {
+  const navHeaders = navigation?.authHeadersForRole(role);
+  return Object.keys(navHeaders || {}).length > 0 ? navHeaders : dispatcherAuthHeaders;
+};
 
 const dispatcherAuthHeaders = {
   "X-CargoFlow-User-Id": "dispatcher-demo",
@@ -12,25 +24,12 @@ const dispatcherAuthHeaders = {
   "X-CargoFlow-Dispatch-Region-Ids": "east-china",
 };
 
-const cargoOwnerAuthHeaders = {
-  "X-CargoFlow-User-Id": "owner-acme",
-  "X-CargoFlow-Role": "cargo_owner",
-  "X-CargoFlow-Tenant-Id": "cgf-demo",
-};
-
-const systemAdminAuthHeaders = {
-  "X-CargoFlow-User-Id": "admin-demo",
-  "X-CargoFlow-Role": "system_admin",
-  "X-CargoFlow-Tenant-Id": "cgf-demo",
-};
-
-const driverAuthHeaders = {
-  "X-CargoFlow-User-Id": "driver-demo",
-  "X-CargoFlow-Role": "driver",
-  "X-CargoFlow-Tenant-Id": "cgf-demo",
-};
+const cargoOwnerAuthHeaders = getAuthHeaders("cargo_owner");
+const systemAdminAuthHeaders = getAuthHeaders("system_admin");
+const driverAuthHeaders = getAuthHeaders("driver");
 
 const state = {
+  role: initialRole,
   alerts: [],
   logs: [],
   distribution: {
@@ -134,7 +133,7 @@ const requestJson = async (path, options = {}) => {
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
-      ...(options.authHeaders || dispatcherAuthHeaders),
+      ...(options.authHeaders || getAuthHeaders(state.role)),
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     },
@@ -1165,9 +1164,30 @@ const submitDriverReport = async (event) => {
   setStatus("Driver report submitted", "ok");
 };
 
+const updateRoleTabVisibility = () => {
+  if (!navigation) {
+    return;
+  }
+  const visibleEntries = navigation.visibleEntriesForRole(state.role) || [];
+  const visibleViews = new Set(visibleEntries.map((entry) => entry.view || entry.id));
+  document.querySelectorAll(".mode-tab").forEach((button) => {
+    const view = button.dataset.view;
+    button.style.display = visibleViews.has(view) ? "" : "none";
+  });
+  if (!visibleViews.has(state.activeView) && visibleEntries.length > 0) {
+    switchView(visibleEntries[0].view || visibleEntries[0].id || "dispatch");
+  }
+};
+
 const wireEvents = () => {
   document.querySelectorAll(".mode-tab").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
+  });
+  $("role-select").addEventListener("change", (event) => {
+    state.role = event.target.value;
+    window.localStorage.setItem("cargoflowRole", state.role);
+    updateRoleTabVisibility();
+    switchView(navigation?.defaultEntryForRole(state.role)?.view || "dispatch");
   });
   $("refresh-distribution").addEventListener("click", () => loadDistribution().catch(handleError));
   $("refresh-alerts").addEventListener("click", () => loadAlerts().catch(handleError));
@@ -1276,5 +1296,23 @@ const handleError = (error) => {
   setStatus(error.message, "error");
 };
 
+const populateRoleSelect = () => {
+  const select = $("role-select");
+  if (!navigation?.roleOrder) {
+    return;
+  }
+  navigation.roleOrder.forEach((role) => {
+    const profile = navigation.roleProfiles[role];
+    const option = document.createElement("option");
+    option.value = role;
+    option.textContent = profile?.label || role;
+    option.selected = role === state.role;
+    select.append(option);
+  });
+};
+
+$("role-select").value = initialRole;
+populateRoleSelect();
+updateRoleTabVisibility();
 wireEvents();
 loadDistribution().catch(handleError);

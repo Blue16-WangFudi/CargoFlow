@@ -85,6 +85,20 @@ button:disabled {
   color: #ffffff;
 }
 
+.role-picker {
+  display: grid;
+  min-width: 220px;
+  gap: 7px;
+  color: #c9d1d9;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.role-picker span {
+  color: #8b949e;
+  text-transform: uppercase;
+}
+
 .eyebrow {
   margin: 0 0 7px;
   color: #8b949e;
