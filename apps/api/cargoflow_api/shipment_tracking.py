@@ -10,9 +10,15 @@ from typing import Any
 from uuid import uuid4
 
 from cargoflow_api.access_control import Principal, ShipmentScope, require_shipment_access
+from cargoflow_api.driver_status_reporting import (
+    DriverStatusReportPayload,
+    ensure_forward_transition,
+    require_assigned_driver_report_access,
+)
 from cargoflow_api.domain import (
     AlertSeverity,
     AlertType,
+    StatusReport,
     StatusReportState,
     TransportTaskStatus,
 )
@@ -333,6 +339,40 @@ class ShipmentTrackingStore:
             },
         }
 
+    def add_driver_status_report(
+        self,
+        shipment_id: str,
+        principal: Principal,
+        payload: DriverStatusReportPayload,
+    ) -> tuple[StatusReport, ShipmentTrackingRecord]:
+        with self._lock:
+            record = self._record_for(shipment_id)
+            require_assigned_driver_report_access(principal, record.scope)
+            next_status = ensure_forward_transition(
+                record.transport_status,
+                payload.report_status,
+            )
+            report = StatusReport(
+                id=f"report-{uuid4().hex}",
+                task_id=record.task_id,
+                report_status=payload.report_status,
+                reporter_user_id=principal.user_id,
+                reported_at=payload.reported_at,
+                note=payload.note,
+                attachment_urls=payload.attachment_urls,
+                created_at=datetime.now(UTC).replace(microsecond=0),
+            )
+            updated = replace(
+                record,
+                transport_status=next_status,
+                status_reports=(
+                    *record.status_reports,
+                    TrajectoryStatusReportPoint.from_status_report(report),
+                ),
+            )
+            self._records[record.shipment_id] = updated
+            return report, updated
+
     def _record_for(self, shipment_id: str) -> ShipmentTrackingRecord:
         with self._lock:
             normalized = self._aliases.get(shipment_id, shipment_id)
@@ -452,12 +492,24 @@ class TrajectoryStatusReportPoint:
     reporter_user_id: str
     reported_at: datetime
     note: str | None = None
+    attachment_urls: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.report_id.strip():
             raise ValueError("report_id must not be blank")
         if not self.reporter_user_id.strip():
             raise ValueError("reporter_user_id must not be blank")
+
+    @classmethod
+    def from_status_report(cls, report: StatusReport) -> "TrajectoryStatusReportPoint":
+        return cls(
+            report_id=report.id,
+            report_status=report.report_status,
+            reporter_user_id=report.reporter_user_id,
+            reported_at=report.reported_at,
+            note=report.note,
+            attachment_urls=report.attachment_urls,
+        )
 
     def to_wire(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -470,6 +522,8 @@ class TrajectoryStatusReportPoint:
         }
         if self.note:
             payload["note"] = self.note
+        if self.attachment_urls:
+            payload["attachmentUrls"] = list(self.attachment_urls)
         return payload
 
 

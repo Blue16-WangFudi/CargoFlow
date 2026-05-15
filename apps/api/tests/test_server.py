@@ -16,6 +16,7 @@ from cargoflow_api.server import (
     build_health_payload,
     create_server,
     driver_command_action_from_path,
+    driver_status_report_shipment_id,
     driver_task_action_from_path,
     eta_shipment_id,
     latest_location_shipment_id,
@@ -121,6 +122,23 @@ class PayloadTests(unittest.TestCase):
         )
         self.assertIsNone(trajectory_shipment_id("/api/shipments/CGF-DEMO-001/eta"))
 
+    def test_driver_status_report_route_parser_extracts_shipment_id(self) -> None:
+        self.assertEqual(
+            driver_status_report_shipment_id(
+                "/api/shipments/CGF-DEMO-001/driver-status-reports"
+            ),
+            "CGF-DEMO-001",
+        )
+        self.assertEqual(
+            driver_status_report_shipment_id(
+                "/api/shipments/CGF%20DEMO/driver-status-reports"
+            ),
+            "CGF DEMO",
+        )
+        self.assertIsNone(
+            driver_status_report_shipment_id("/api/shipments/CGF-DEMO-001/trajectory")
+        )
+
     def test_sign_route_parser_extracts_shipment_id(self) -> None:
         self.assertEqual(
             sign_shipment_id("/api/shipments/CGF-DEMO-001/sign"),
@@ -185,6 +203,7 @@ class HttpRouteTests(unittest.TestCase):
         cls.thread.join(timeout=2)
 
     def setUp(self) -> None:
+        server_module.SHIPMENT_TRACKING = ShipmentTrackingStore.demo()
         server_module.ALERT_RULES = AlertRuleStore()
         server_module.ALERT_HANDLING = AlertHandlingStore.demo(server_module.ALERT_RULES)
         server_module.DEVICE_EVENTS = DeviceEventStore.demo(server_module.ALERT_RULES)
@@ -993,6 +1012,94 @@ class HttpRouteTests(unittest.TestCase):
         payload = json.loads(error.read().decode("utf-8"))
         self.assertEqual(error.code, 400)
         self.assertEqual(payload["error"], "invalid_device_event")
+
+    def test_driver_status_report_route_accepts_assigned_driver_report(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/driver-status-reports",
+            data=json.dumps(
+                {
+                    "reportStatus": "delivered",
+                    "reportedAt": "2026-05-13T11:10:00+00:00",
+                    "note": "Delivered to consignee gate.",
+                    "attachmentUrls": ["https://files.example.com/pod-001.jpg"],
+                }
+            ).encode("utf-8"),
+            headers={
+                **DRIVER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            created = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(created["shipmentId"], "CGF-DEMO-001")
+        self.assertEqual(created["transportStatus"], "delivered")
+        self.assertEqual(created["statusReport"]["reportStatus"], "delivered")
+        self.assertEqual(created["statusReport"]["reporterUserId"], "driver-demo")
+        self.assertEqual(
+            created["statusReport"]["attachmentUrls"],
+            ["https://files.example.com/pod-001.jpg"],
+        )
+
+        trajectory_request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/trajectory",
+            headers=DEMO_AUTH_HEADERS,
+        )
+        with urlopen(trajectory_request, timeout=3) as response:
+            trajectory = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(trajectory["transportStatus"], "delivered")
+        delivered_points = [
+            point
+            for point in trajectory["trajectory"]
+            if point.get("reportStatus") == "delivered"
+        ]
+        self.assertEqual(len(delivered_points), 1)
+        self.assertEqual(delivered_points[0]["reporterUserId"], "driver-demo")
+        self.assertEqual(
+            delivered_points[0]["attachmentUrls"],
+            ["https://files.example.com/pod-001.jpg"],
+        )
+
+    def test_driver_status_report_route_rejects_non_assigned_user(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/driver-status-reports",
+            data=json.dumps({"reportStatus": "delivered"}).encode("utf-8"),
+            headers={
+                **DEMO_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 403)
+        self.assertEqual(payload["error"], "driver_report_access_denied")
+
+    def test_driver_status_report_route_rejects_non_forward_status(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/shipments/CGF-DEMO-001/driver-status-reports",
+            data=json.dumps({"reportStatus": "loaded"}).encode("utf-8"),
+            headers={
+                **DRIVER_AUTH_HEADERS,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+
+        error = context.exception
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(error.code, 409)
+        self.assertEqual(payload["error"], "driver_status_conflict")
 
     def test_vehicle_routes_create_list_update_disable_and_unbind(self) -> None:
         create_request = Request(

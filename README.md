@@ -103,6 +103,11 @@ startup and check commands.
   points ordered by event time, including accepted GPS points, planned start
   and destination, alert points, and driver status report nodes. Key nodes are
   preserved and the current development response is not simplified.
+- `POST /api/shipments/{shipmentId}/driver-status-reports` accepts assigned
+  driver reports for `loaded`, `in_transit`, and `delivered`. Reports require
+  the driver role for the bound task, only move the transport status forward,
+  and preserve reporter, reported time, note, and attachment URLs for trajectory
+  replay.
 - `POST /api/shipments/{shipmentId}/sign` lets the cargo owner sign for a
   shipment after the driver reports it delivered, moving the current
   development tracking status to `signed`.
